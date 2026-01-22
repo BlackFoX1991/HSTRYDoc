@@ -30,8 +30,9 @@
         {
             System.ComponentModel.ComponentResourceManager resources = new System.ComponentModel.ComponentResourceManager(typeof(aboutDiag));
             panel1 = new Panel();
-            label1 = new Label();
             linkLabel1 = new LinkLabel();
+            label1 = new Label();
+            button1 = new Button();
             panel1.SuspendLayout();
             SuspendLayout();
             // 
@@ -41,6 +42,7 @@
             panel1.BackgroundImage = (Image)resources.GetObject("panel1.BackgroundImage");
             panel1.BackgroundImageLayout = ImageLayout.Stretch;
             panel1.BorderStyle = BorderStyle.FixedSingle;
+            panel1.Controls.Add(button1);
             panel1.Controls.Add(linkLabel1);
             panel1.Controls.Add(label1);
             panel1.Dock = DockStyle.Fill;
@@ -48,6 +50,19 @@
             panel1.Name = "panel1";
             panel1.Size = new Size(642, 270);
             panel1.TabIndex = 0;
+            // 
+            // linkLabel1
+            // 
+            linkLabel1.ActiveLinkColor = Color.FromArgb(128, 64, 0);
+            linkLabel1.AutoSize = true;
+            linkLabel1.LinkColor = Color.FromArgb(192, 192, 255);
+            linkLabel1.Location = new Point(382, 224);
+            linkLabel1.Name = "linkLabel1";
+            linkLabel1.Size = new Size(186, 15);
+            linkLabel1.TabIndex = 1;
+            linkLabel1.TabStop = true;
+            linkLabel1.Text = "https://github.com/BlackFoX1991";
+            linkLabel1.LinkClicked += linkLabel1_LinkClicked;
             // 
             // label1
             // 
@@ -59,17 +74,17 @@
             label1.TabIndex = 0;
             label1.Text = "HstryDocu is a secure text container that stores and organizes your notes, protecting them with BitChain-style encryption for confidentiality and integrity.\r\n© 2026 Artur Loewen\r\n";
             // 
-            // linkLabel1
+            // button1
             // 
-            linkLabel1.ActiveLinkColor = Color.FromArgb(128, 64, 0);
-            linkLabel1.AutoSize = true;
-            linkLabel1.LinkColor = Color.FromArgb(192, 192, 255);
-            linkLabel1.Location = new Point(443, 8);
-            linkLabel1.Name = "linkLabel1";
-            linkLabel1.Size = new Size(186, 15);
-            linkLabel1.TabIndex = 1;
-            linkLabel1.TabStop = true;
-            linkLabel1.Text = "https://github.com/BlackFoX1991";
+            button1.BackColor = Color.Maroon;
+            button1.FlatStyle = FlatStyle.Flat;
+            button1.Location = new Point(603, 11);
+            button1.Name = "button1";
+            button1.Size = new Size(26, 24);
+            button1.TabIndex = 2;
+            button1.Text = "X";
+            button1.UseVisualStyleBackColor = false;
+            button1.Click += button1_Click;
             // 
             // aboutDiag
             // 
@@ -93,5 +108,6 @@
         private Panel panel1;
         private LinkLabel linkLabel1;
         private Label label1;
+        private Button button1;
     }
 }

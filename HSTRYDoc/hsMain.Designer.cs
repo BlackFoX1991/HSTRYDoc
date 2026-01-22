@@ -487,32 +487,32 @@
             // 
             newToolStripMenuItem.Image = (Image)resources.GetObject("newToolStripMenuItem.Image");
             newToolStripMenuItem.Name = "newToolStripMenuItem";
-            newToolStripMenuItem.Size = new Size(178, 22);
+            newToolStripMenuItem.Size = new Size(180, 22);
             newToolStripMenuItem.Text = "New Block...";
             // 
             // toolStripMenuItem1
             // 
             toolStripMenuItem1.Name = "toolStripMenuItem1";
-            toolStripMenuItem1.Size = new Size(175, 6);
+            toolStripMenuItem1.Size = new Size(177, 6);
             // 
             // saveContainerToolStripMenuItem
             // 
             saveContainerToolStripMenuItem.Image = (Image)resources.GetObject("saveContainerToolStripMenuItem.Image");
             saveContainerToolStripMenuItem.Name = "saveContainerToolStripMenuItem";
-            saveContainerToolStripMenuItem.Size = new Size(178, 22);
+            saveContainerToolStripMenuItem.Size = new Size(180, 22);
             saveContainerToolStripMenuItem.Text = "Save Container...";
             // 
             // saveContainerAsToolStripMenuItem
             // 
             saveContainerAsToolStripMenuItem.Name = "saveContainerAsToolStripMenuItem";
-            saveContainerAsToolStripMenuItem.Size = new Size(178, 22);
+            saveContainerAsToolStripMenuItem.Size = new Size(180, 22);
             saveContainerAsToolStripMenuItem.Text = "Save Container As...";
             // 
             // openContainerToolStripMenuItem
             // 
             openContainerToolStripMenuItem.Image = (Image)resources.GetObject("openContainerToolStripMenuItem.Image");
             openContainerToolStripMenuItem.Name = "openContainerToolStripMenuItem";
-            openContainerToolStripMenuItem.Size = new Size(178, 22);
+            openContainerToolStripMenuItem.Size = new Size(180, 22);
             openContainerToolStripMenuItem.Text = "Open Container...";
             // 
             // exportBlockToolStripMenuItem
@@ -526,13 +526,13 @@
             // toolStripMenuItem2
             // 
             toolStripMenuItem2.Name = "toolStripMenuItem2";
-            toolStripMenuItem2.Size = new Size(175, 6);
+            toolStripMenuItem2.Size = new Size(177, 6);
             // 
             // closeToolStripMenuItem
             // 
             closeToolStripMenuItem.Image = (Image)resources.GetObject("closeToolStripMenuItem.Image");
             closeToolStripMenuItem.Name = "closeToolStripMenuItem";
-            closeToolStripMenuItem.Size = new Size(178, 22);
+            closeToolStripMenuItem.Size = new Size(180, 22);
             closeToolStripMenuItem.Text = "Exit";
             closeToolStripMenuItem.Click += closeToolStripMenuItem_Click;
             // 
@@ -547,14 +547,14 @@
             // 
             searchInBlockToolStripMenuItem.Image = (Image)resources.GetObject("searchInBlockToolStripMenuItem.Image");
             searchInBlockToolStripMenuItem.Name = "searchInBlockToolStripMenuItem";
-            searchInBlockToolStripMenuItem.Size = new Size(191, 22);
+            searchInBlockToolStripMenuItem.Size = new Size(186, 22);
             searchInBlockToolStripMenuItem.Text = "Search in Block...";
             // 
             // searchInContainerToolStripMenuItem
             // 
             searchInContainerToolStripMenuItem.Image = (Image)resources.GetObject("searchInContainerToolStripMenuItem.Image");
             searchInContainerToolStripMenuItem.Name = "searchInContainerToolStripMenuItem";
-            searchInContainerToolStripMenuItem.Size = new Size(191, 22);
+            searchInContainerToolStripMenuItem.Size = new Size(186, 22);
             searchInContainerToolStripMenuItem.Text = "Search in Container...";
             // 
             // helpToolStripMenuItem
@@ -568,8 +568,9 @@
             // 
             aboutToolStripMenuItem.Image = (Image)resources.GetObject("aboutToolStripMenuItem.Image");
             aboutToolStripMenuItem.Name = "aboutToolStripMenuItem";
-            aboutToolStripMenuItem.Size = new Size(116, 22);
+            aboutToolStripMenuItem.Size = new Size(180, 22);
             aboutToolStripMenuItem.Text = "About...";
+            aboutToolStripMenuItem.Click += aboutToolStripMenuItem_Click;
             // 
             // hsMain
             // 

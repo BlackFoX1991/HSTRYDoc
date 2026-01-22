@@ -1123,6 +1123,11 @@ namespace HSTRYDoc
             dlg.ShowDialog(this);
         }
 
+        private void aboutToolStripMenuItem_Click(object sender, EventArgs e)
+        {
+            aboutDiag abt = new();
+            abt.ShowDialog(this);
+        }
     }
 
     public sealed record ContainerSearchHit(int BlockIndex, string BlockTitle, int IndexInText, string Snippet);
