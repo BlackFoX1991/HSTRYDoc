@@ -1,15 +1,5 @@
-// hsMain.cs (KOMPLETT)
-// - passt zu deinem Designer (RTF-Toolbar hat keine Events verdrahtet -> wir verdrahten alles hier)
-// - enthält Container/Block-Logik (Create/Open/Save/New/Rename/Commit/Selection)
-// - enthält RTF-Formatierung (Bold/Italic/Underline/Strike, Fontsize, Fore/Backcolor via ColorPicker Popup)
-// - enthält Suche (Search in Block / Search in Container) + Shortcuts (Ctrl+F, Ctrl+Shift+F, F3)
-//
-// Voraussetzungen (existieren als Klassen im Projekt):
-// - HSTRYContainer (mit CreateNew/Load/Save/Blocks/AddRtfDocument/GetRtfDocument/UpdateRtfDocument/RenameBlock/ComputeBlockHash/GetStoredSizeBytes)
-// - Global.FileMagic, Global.CurrentEditorEncoding, Global.AppName
-// - ByteFormat.ToHumanSize
-// - PasswordDialog, TextPromptDialog, FindDialog, ContainerSearchResultsDialog
-// - colorPicker Form (Ctor(color), SelectedColor, CloseOnDeactivate)
+// hsMain.cs (FULL)
+// NOTE: Only UI strings/messages were translated to English. Logic and structure remain unchanged.
 
 using System.Globalization;
 using System.IO;
@@ -46,7 +36,7 @@ namespace HSTRYDoc
         {
             WireUiEvents();
 
-            // Startup: "Öffnen mit..." oder neuer Container
+            // Startup: "Open with..." or create new container
             if (!TryOpenFromCommandLineOrShell())
             {
                 if (!UiCreateNewContainer(initialStartup: true))
@@ -104,7 +94,7 @@ namespace HSTRYDoc
 
         private bool OpenContainerFromPath(string path)
         {
-            using var pwd = new PasswordDialog("Container öffnen", "Container-Passwort eingeben:", requireConfirm: false);
+            using var pwd = new PasswordDialog("Open container", "Enter container password:", requireConfirm: false);
             if (pwd.ShowDialog(this) != DialogResult.OK) return false;
 
             try
@@ -127,13 +117,13 @@ namespace HSTRYDoc
             }
             catch (Exception ex)
             {
-                MessageBox.Show(this, ex.Message, "Container öffnen", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                MessageBox.Show(this, ex.Message, "Open container", MessageBoxButtons.OK, MessageBoxIcon.Error);
                 return false;
             }
         }
 
         // ============================================================
-        // UI wiring (Designer: RTF-Toolbar hat keine Events -> hier)
+        // UI wiring (Designer: RTF-Toolbar has no events -> wired here)
         // ============================================================
         private void WireUiEvents()
         {
@@ -255,7 +245,7 @@ namespace HSTRYDoc
             {
                 var res = MessageBox.Show(
                     this,
-                    "Container hat ungespeicherte Änderungen. Jetzt speichern?",
+                    "The container has unsaved changes. Save now?",
                     Global.AppName,
                     MessageBoxButtons.YesNoCancel,
                     MessageBoxIcon.Question);
@@ -284,7 +274,7 @@ namespace HSTRYDoc
         // ============================================================
         private bool UiCreateNewContainer(bool initialStartup = false)
         {
-            using var pwd = new PasswordDialog("Container erstellen", "Passwort für den neuen Container wählen:", requireConfirm: true);
+            using var pwd = new PasswordDialog("Create container", "Choose a password for the new container:", requireConfirm: true);
             if (pwd.ShowDialog(this) != DialogResult.OK)
                 return false;
 
@@ -306,7 +296,7 @@ namespace HSTRYDoc
             }
             catch (Exception ex)
             {
-                MessageBox.Show(this, ex.Message, "Container erstellen", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                MessageBox.Show(this, ex.Message, "Create container", MessageBoxButtons.OK, MessageBoxIcon.Error);
                 return false;
             }
         }
@@ -319,8 +309,8 @@ namespace HSTRYDoc
             {
                 var res = MessageBox.Show(
                     this,
-                    "Container hat ungespeicherte Änderungen. Ohne Speichern fortfahren?",
-                    "Container öffnen",
+                    "The container has unsaved changes. Continue without saving?",
+                    "Open container",
                     MessageBoxButtons.YesNo,
                     MessageBoxIcon.Warning);
 
@@ -329,7 +319,7 @@ namespace HSTRYDoc
 
             using var ofd = new OpenFileDialog
             {
-                Filter = "HSTRY Container (*.hstry)|*.hstry|Alle Dateien (*.*)|*.*",
+                Filter = "HSTRY Container (*.hstry)|*.hstry|All files (*.*)|*.*",
                 CheckFileExists = true
             };
 
@@ -337,7 +327,7 @@ namespace HSTRYDoc
 
             if (!LooksLikeHstryFile(ofd.FileName))
             {
-                MessageBox.Show(this, "Die Datei ist keine gültige HSTRY-Containerdatei.", "Container öffnen",
+                MessageBox.Show(this, "The selected file is not a valid HSTRY container file.", "Open container",
                     MessageBoxButtons.OK, MessageBoxIcon.Warning);
                 return;
             }
@@ -362,7 +352,7 @@ namespace HSTRYDoc
             }
             catch (Exception ex)
             {
-                MessageBox.Show(this, ex.Message, "Container speichern", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                MessageBox.Show(this, ex.Message, "Save container", MessageBoxButtons.OK, MessageBoxIcon.Error);
                 return false;
             }
         }
@@ -374,7 +364,7 @@ namespace HSTRYDoc
 
             using var sfd = new SaveFileDialog
             {
-                Filter = "HSTRY Container (*.hstry)|*.hstry|Alle Dateien (*.*)|*.*",
+                Filter = "HSTRY Container (*.hstry)|*.hstry|All files (*.*)|*.*",
                 DefaultExt = "hstry",
                 AddExtension = true,
                 FileName = string.IsNullOrWhiteSpace(_containerPath) ? "container.hstry" : Path.GetFileName(_containerPath)
@@ -392,7 +382,7 @@ namespace HSTRYDoc
             }
             catch (Exception ex)
             {
-                MessageBox.Show(this, ex.Message, "Container speichern unter", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                MessageBox.Show(this, ex.Message, "Save container as", MessageBoxButtons.OK, MessageBoxIcon.Error);
                 return false;
             }
         }
@@ -410,7 +400,7 @@ namespace HSTRYDoc
             if (!MaybeCommitCurrentBlock()) return;
 
             string title = _container!.GenerateUniqueTitle();
-            using (var dlg = new TextPromptDialog("Neuer Block", "Blockname:", title))
+            using (var dlg = new TextPromptDialog("New block", "Block name:", title))
             {
                 if (dlg.ShowDialog(this) != DialogResult.OK) return;
                 title = dlg.InputText;
@@ -439,7 +429,7 @@ namespace HSTRYDoc
             }
             catch (Exception ex)
             {
-                MessageBox.Show(this, ex.Message, "Neuer Block", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                MessageBox.Show(this, ex.Message, "New block", MessageBoxButtons.OK, MessageBoxIcon.Error);
             }
         }
 
@@ -454,7 +444,7 @@ namespace HSTRYDoc
 
             var b = _container.Blocks[idx];
 
-            using var dlg = new TextPromptDialog("Block umbenennen", "Neuer Name:", b.Title);
+            using var dlg = new TextPromptDialog("Rename block", "New name:", b.Title);
             if (dlg.ShowDialog(this) != DialogResult.OK) return;
 
             try
@@ -468,7 +458,7 @@ namespace HSTRYDoc
             }
             catch (Exception ex)
             {
-                MessageBox.Show(this, ex.Message, "Block umbenennen", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                MessageBox.Show(this, ex.Message, "Rename block", MessageBoxButtons.OK, MessageBoxIcon.Error);
             }
         }
 
@@ -509,7 +499,7 @@ namespace HSTRYDoc
             }
             catch (Exception ex)
             {
-                MessageBox.Show(this, ex.Message, "Block laden", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                MessageBox.Show(this, ex.Message, "Load block", MessageBoxButtons.OK, MessageBoxIcon.Error);
             }
             finally
             {
@@ -525,7 +515,7 @@ namespace HSTRYDoc
 
             var res = MessageBox.Show(
                 this,
-                "Aktueller Block wurde geändert. Änderungen übernehmen?",
+                "The current block has been modified. Apply changes?",
                 Global.AppName,
                 MessageBoxButtons.YesNoCancel,
                 MessageBoxIcon.Question);
@@ -550,7 +540,7 @@ namespace HSTRYDoc
             }
             catch (Exception ex)
             {
-                MessageBox.Show(this, ex.Message, "Änderungen übernehmen", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                MessageBox.Show(this, ex.Message, "Apply changes", MessageBoxButtons.OK, MessageBoxIcon.Error);
                 return false;
             }
         }
@@ -644,7 +634,7 @@ namespace HSTRYDoc
         {
             if (_container == null || _currentBlockIndex < 0)
             {
-                MessageBox.Show(this, "Kein Block geöffnet.", "Search in Block", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                MessageBox.Show(this, "No block is currently open.", "Search in block", MessageBoxButtons.OK, MessageBoxIcon.Information);
                 return;
             }
 
@@ -685,7 +675,7 @@ namespace HSTRYDoc
 
             if (idx < 0)
             {
-                MessageBox.Show(this, "Kein Treffer gefunden.", "Search in Block", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                MessageBox.Show(this, "No matches found.", "Search in block", MessageBoxButtons.OK, MessageBoxIcon.Information);
                 return;
             }
 
@@ -698,14 +688,14 @@ namespace HSTRYDoc
         {
             if (_container == null)
             {
-                MessageBox.Show(this, "Kein Container geöffnet.", "Search in Container", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                MessageBox.Show(this, "No container is currently open.", "Search in container", MessageBoxButtons.OK, MessageBoxIcon.Information);
                 return;
             }
 
             using var dlg = new FindDialog
             {
                 StartPosition = FormStartPosition.CenterParent,
-                Text = "Search in Container",
+                Text = "Search in container",
                 QueryText = _lastFindText,
                 MatchCase = _lastFindMatchCase,
                 WholeWord = _lastFindWholeWord,
@@ -743,7 +733,7 @@ namespace HSTRYDoc
 
             if (results.Count == 0)
             {
-                MessageBox.Show(this, "Keine Treffer im Container.", "Search in Container", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                MessageBox.Show(this, "No matches were found in the container.", "Search in container", MessageBoxButtons.OK, MessageBoxIcon.Information);
                 return;
             }
 
@@ -795,7 +785,7 @@ namespace HSTRYDoc
         }
 
         // ============================================================
-        // RTF Formatting + ColorPicker
+        // RTF Formatting + ColorPicker + Clipboard + Shortcuts
         // ============================================================
         private void RtfMainText_KeyDown(object? sender, KeyEventArgs e)
         {

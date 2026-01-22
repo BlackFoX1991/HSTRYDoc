@@ -2,109 +2,82 @@
 {
     partial class Chooser
     {
-        /// <summary>
-        /// Required designer variable.
-        /// </summary>
         private System.ComponentModel.IContainer components = null;
 
-        /// <summary>
-        /// Clean up any resources being used.
-        /// </summary>
-        /// <param name="disposing">true if managed resources should be disposed; otherwise, false.</param>
+        private Button btnNew;
+        private Button btnOpen;
+        private Button btnExit;
+        private Label lblTitle;
+
         protected override void Dispose(bool disposing)
         {
-            if (disposing && (components != null))
-            {
-                components.Dispose();
-            }
+            if (disposing && (components != null)) components.Dispose();
             base.Dispose(disposing);
         }
 
-        #region Windows Form Designer generated code
-
-        /// <summary>
-        /// Required method for Designer support - do not modify
-        /// the contents of this method with the code editor.
-        /// </summary>
         private void InitializeComponent()
         {
             System.ComponentModel.ComponentResourceManager resources = new System.ComponentModel.ComponentResourceManager(typeof(Chooser));
-            panel1 = new Panel();
-            button1 = new Button();
-            button2 = new Button();
-            button3 = new Button();
-            panel1.SuspendLayout();
+            btnNew = new Button();
+            btnOpen = new Button();
+            btnExit = new Button();
+            lblTitle = new Label();
             SuspendLayout();
             // 
-            // panel1
+            // btnNew
             // 
-            panel1.BackColor = SystemColors.ActiveCaption;
-            panel1.BackgroundImageLayout = ImageLayout.Stretch;
-            panel1.BorderStyle = BorderStyle.FixedSingle;
-            panel1.Controls.Add(button3);
-            panel1.Controls.Add(button2);
-            panel1.Controls.Add(button1);
-            panel1.Dock = DockStyle.Fill;
-            panel1.Location = new Point(0, 0);
-            panel1.Name = "panel1";
-            panel1.Size = new Size(499, 90);
-            panel1.TabIndex = 0;
+            btnNew.DialogResult = DialogResult.Yes;
+            btnNew.Location = new Point(12, 70);
+            btnNew.Name = "btnNew";
+            btnNew.Size = new Size(100, 32);
+            btnNew.TabIndex = 1;
+            btnNew.Text = "New";
             // 
-            // button1
+            // btnOpen
             // 
-            button1.FlatStyle = FlatStyle.Popup;
-            button1.Image = (Image)resources.GetObject("button1.Image");
-            button1.Location = new Point(11, 15);
-            button1.Name = "button1";
-            button1.Size = new Size(154, 59);
-            button1.TabIndex = 0;
-            button1.Text = "New...";
-            button1.TextImageRelation = TextImageRelation.ImageAboveText;
-            button1.UseVisualStyleBackColor = true;
+            btnOpen.DialogResult = DialogResult.No;
+            btnOpen.Location = new Point(128, 70);
+            btnOpen.Name = "btnOpen";
+            btnOpen.Size = new Size(100, 32);
+            btnOpen.TabIndex = 2;
+            btnOpen.Text = "Open";
             // 
-            // button2
+            // btnExit
             // 
-            button2.FlatStyle = FlatStyle.Popup;
-            button2.Image = (Image)resources.GetObject("button2.Image");
-            button2.Location = new Point(171, 15);
-            button2.Name = "button2";
-            button2.Size = new Size(154, 59);
-            button2.TabIndex = 1;
-            button2.Text = "Open...";
-            button2.TextImageRelation = TextImageRelation.ImageAboveText;
-            button2.UseVisualStyleBackColor = true;
+            btnExit.DialogResult = DialogResult.Cancel;
+            btnExit.Location = new Point(248, 70);
+            btnExit.Name = "btnExit";
+            btnExit.Size = new Size(100, 32);
+            btnExit.TabIndex = 3;
+            btnExit.Text = "Exit";
             // 
-            // button3
+            // lblTitle
             // 
-            button3.FlatStyle = FlatStyle.Popup;
-            button3.Image = (Image)resources.GetObject("button3.Image");
-            button3.Location = new Point(331, 15);
-            button3.Name = "button3";
-            button3.Size = new Size(154, 59);
-            button3.TabIndex = 2;
-            button3.Text = "Exit";
-            button3.TextImageRelation = TextImageRelation.ImageAboveText;
-            button3.UseVisualStyleBackColor = true;
+            lblTitle.Location = new Point(12, 12);
+            lblTitle.Name = "lblTitle";
+            lblTitle.Size = new Size(336, 40);
+            lblTitle.TabIndex = 0;
+            lblTitle.Text = "What would you like to do?";
+            lblTitle.TextAlign = ContentAlignment.MiddleLeft;
             // 
             // Chooser
             // 
             AutoScaleDimensions = new SizeF(7F, 15F);
             AutoScaleMode = AutoScaleMode.Font;
-            ClientSize = new Size(499, 90);
-            Controls.Add(panel1);
-            FormBorderStyle = FormBorderStyle.None;
+            ClientSize = new Size(360, 109);
+            Controls.Add(lblTitle);
+            Controls.Add(btnNew);
+            Controls.Add(btnOpen);
+            Controls.Add(btnExit);
+            FormBorderStyle = FormBorderStyle.FixedDialog;
+            Icon = (Icon)resources.GetObject("$this.Icon");
+            MaximizeBox = false;
+            MinimizeBox = false;
             Name = "Chooser";
-            StartPosition = FormStartPosition.CenterScreen;
-            Text = "Chooser";
-            panel1.ResumeLayout(false);
+            ShowInTaskbar = false;
+            StartPosition = FormStartPosition.CenterParent;
+            Text = "HstryDocu Start...";
             ResumeLayout(false);
         }
-
-        #endregion
-
-        private Panel panel1;
-        private Button button2;
-        private Button button1;
-        private Button button3;
     }
 }

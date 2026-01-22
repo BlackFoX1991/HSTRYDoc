@@ -4,11 +4,11 @@
     {
         private System.ComponentModel.IContainer components = null;
 
-        private ListView lvResults;
-        private ColumnHeader colBlock;
-        private ColumnHeader colSnippet;
-        private Button btnOpen;
-        private Button btnClose;
+        private System.Windows.Forms.ListView lvResults;
+        private System.Windows.Forms.ColumnHeader colBlock;
+        private System.Windows.Forms.ColumnHeader colSnippet;
+        private System.Windows.Forms.Button btnOpen;
+        private System.Windows.Forms.Button btnClose;
 
         protected override void Dispose(bool disposing)
         {
@@ -18,52 +18,69 @@
 
         private void InitializeComponent()
         {
-            components = new System.ComponentModel.Container();
-
+            System.ComponentModel.ComponentResourceManager resources = new System.ComponentModel.ComponentResourceManager(typeof(ContainerSearchResultsDialog));
             lvResults = new ListView();
             colBlock = new ColumnHeader();
             colSnippet = new ColumnHeader();
             btnOpen = new Button();
             btnClose = new Button();
-
             SuspendLayout();
-
-            Text = "Search results";
-            FormBorderStyle = FormBorderStyle.FixedDialog;
-            MaximizeBox = false;
-            MinimizeBox = false;
-            ShowInTaskbar = false;
-            ClientSize = new Size(760, 420);
-            StartPosition = FormStartPosition.CenterParent;
-
-            lvResults.Location = new Point(12, 12);
-            lvResults.Size = new Size(736, 360);
+            // 
+            // lvResults
+            // 
             lvResults.Anchor = AnchorStyles.Top | AnchorStyles.Bottom | AnchorStyles.Left | AnchorStyles.Right;
-            lvResults.View = View.Details;
+            lvResults.Columns.AddRange(new ColumnHeader[] { colBlock, colSnippet });
             lvResults.FullRowSelect = true;
             lvResults.GridLines = true;
-
+            lvResults.Location = new Point(12, 12);
+            lvResults.Name = "lvResults";
+            lvResults.Size = new Size(736, 360);
+            lvResults.TabIndex = 0;
+            lvResults.UseCompatibleStateImageBehavior = false;
+            lvResults.View = View.Details;
+            // 
+            // colBlock
+            // 
             colBlock.Text = "Block";
             colBlock.Width = 180;
+            // 
+            // colSnippet
+            // 
             colSnippet.Text = "Snippet";
             colSnippet.Width = 530;
-
-            lvResults.Columns.AddRange(new[] { colBlock, colSnippet });
-
-            btnOpen.Location = new Point(582, 382);
-            btnOpen.Size = new Size(80, 27);
+            // 
+            // btnOpen
+            // 
             btnOpen.Anchor = AnchorStyles.Bottom | AnchorStyles.Right;
+            btnOpen.Location = new Point(582, 382);
+            btnOpen.Name = "btnOpen";
+            btnOpen.Size = new Size(80, 27);
+            btnOpen.TabIndex = 1;
             btnOpen.Text = "Open";
-
-            btnClose.Location = new Point(668, 382);
-            btnClose.Size = new Size(80, 27);
+            // 
+            // btnClose
+            // 
             btnClose.Anchor = AnchorStyles.Bottom | AnchorStyles.Right;
+            btnClose.Location = new Point(668, 382);
+            btnClose.Name = "btnClose";
+            btnClose.Size = new Size(80, 27);
+            btnClose.TabIndex = 2;
             btnClose.Text = "Close";
-
+            // 
+            // ContainerSearchResultsDialog
+            // 
+            ClientSize = new Size(760, 420);
             Controls.Add(lvResults);
             Controls.Add(btnOpen);
             Controls.Add(btnClose);
-
+            FormBorderStyle = FormBorderStyle.FixedDialog;
+            Icon = (Icon)resources.GetObject("$this.Icon");
+            MaximizeBox = false;
+            MinimizeBox = false;
+            Name = "ContainerSearchResultsDialog";
+            ShowInTaskbar = false;
+            StartPosition = FormStartPosition.CenterParent;
+            Text = "Search results";
             ResumeLayout(false);
         }
     }

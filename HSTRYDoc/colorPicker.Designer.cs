@@ -18,6 +18,7 @@ namespace HSTRYDoc
 
         private void InitializeComponent()
         {
+            System.ComponentModel.ComponentResourceManager resources = new System.ComponentModel.ComponentResourceManager(typeof(colorPicker));
             pnlRight = new Panel();
             lblHex = new Label();
             txtHex = new TextBox();
@@ -220,13 +221,14 @@ namespace HSTRYDoc
             Controls.Add(picWheel);
             DoubleBuffered = true;
             FormBorderStyle = FormBorderStyle.None;
+            Icon = (Icon)resources.GetObject("$this.Icon");
             MaximizeBox = false;
             MinimizeBox = false;
             Name = "colorPicker";
+            ShowInTaskbar = false;
             StartPosition = FormStartPosition.CenterScreen;
             Text = "Pick a Color...";
-            ShowInTaskbar = false;     // <--- ergänzt
-            TopMost = true;            // <--- ergänzt
+            TopMost = true;
             pnlRight.ResumeLayout(false);
             pnlRight.PerformLayout();
             grpRGBA.ResumeLayout(false);
