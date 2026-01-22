@@ -1,13 +1,26 @@
-// hsMain.cs
+// hsMain.cs (KOMPLETT)
+// - passt zu deinem Designer (RTF-Toolbar hat keine Events verdrahtet -> wir verdrahten alles hier)
+// - enth‰lt Container/Block-Logik (Create/Open/Save/New/Rename/Commit/Selection)
+// - enth‰lt RTF-Formatierung (Bold/Italic/Underline/Strike, Fontsize, Fore/Backcolor via ColorPicker Popup)
+// - enth‰lt Suche (Search in Block / Search in Container) + Shortcuts (Ctrl+F, Ctrl+Shift+F, F3)
+//
+// Voraussetzungen (existieren als Klassen im Projekt):
+// - HSTRYContainer (mit CreateNew/Load/Save/Blocks/AddRtfDocument/GetRtfDocument/UpdateRtfDocument/RenameBlock/ComputeBlockHash/GetStoredSizeBytes)
+// - Global.FileMagic, Global.CurrentEditorEncoding, Global.AppName
+// - ByteFormat.ToHumanSize
+// - PasswordDialog, TextPromptDialog, FindDialog, ContainerSearchResultsDialog
+// - colorPicker Form (Ctor(color), SelectedColor, CloseOnDeactivate)
+
 using System.Globalization;
 using System.IO;
+using System.Linq;
+using System.Collections.Generic;
 
 namespace HSTRYDoc
 {
     public partial class hsMain : Form
     {
         private HSTRYDoc.colorPicker? _colorPopup;
-        private Color _currentColor = Color.Black;
 
         // ---- Container/Editor State ----
         private HSTRYContainer? _container;
@@ -18,6 +31,12 @@ namespace HSTRYDoc
         private bool _blockDirty = false;
         private bool _containerDirty = false;
 
+        // ---- Search State ----
+        private string _lastFindText = string.Empty;
+        private bool _lastFindMatchCase = false;
+        private bool _lastFindWholeWord = false;
+        private bool _lastFindWrap = true;
+
         public hsMain()
         {
             InitializeComponent();
@@ -27,11 +46,9 @@ namespace HSTRYDoc
         {
             WireUiEvents();
 
-            // 1) "÷ffnen mit..." beim Start: wenn valide hstry Datei ¸bergeben wurde -> laden
-            // 2) sonst: neuen Container erstellen
+            // Startup: "÷ffnen mit..." oder neuer Container
             if (!TryOpenFromCommandLineOrShell())
             {
-                // Neuer Container (mit Passwort). Wenn User abbricht -> App schlieﬂen.
                 if (!UiCreateNewContainer(initialStartup: true))
                 {
                     Close();
@@ -40,6 +57,7 @@ namespace HSTRYDoc
             }
 
             UpdateUiState();
+            UpdateRtfUiFromSelection();
         }
 
         // ============================================================
@@ -52,25 +70,21 @@ namespace HSTRYDoc
                 string[] args = Environment.GetCommandLineArgs();
                 if (args.Length < 2) return false;
 
-                // Manche Shells geben mehrere args; wir nehmen das erste, das existiert
                 string? path = args.Skip(1).FirstOrDefault(p => !string.IsNullOrWhiteSpace(p) && File.Exists(p));
                 if (string.IsNullOrWhiteSpace(path)) return false;
 
-                // Nur wenn es nach hstry aussieht (Magic) ñ sonst ignorieren
                 if (!LooksLikeHstryFile(path)) return false;
 
                 return OpenContainerFromPath(path);
             }
             catch
             {
-                // Startup soll nie crashen -> fallback: new container
                 return false;
             }
         }
 
         private static bool LooksLikeHstryFile(string path)
         {
-            // Minimalpr¸fung: Magic bytes am Dateianfang m¸ssen passen
             try
             {
                 using var fs = File.OpenRead(path);
@@ -90,7 +104,6 @@ namespace HSTRYDoc
 
         private bool OpenContainerFromPath(string path)
         {
-            // Passwort abfragen und laden; true nur bei Erfolg
             using var pwd = new PasswordDialog("Container ˆffnen", "Container-Passwort eingeben:", requireConfirm: false);
             if (pwd.ShowDialog(this) != DialogResult.OK) return false;
 
@@ -120,45 +133,70 @@ namespace HSTRYDoc
         }
 
         // ============================================================
-        // UI wiring (nur Controls die im Designer NICHT verdrahtet sind)
+        // UI wiring (Designer: RTF-Toolbar hat keine Events -> hier)
         // ============================================================
         private void WireUiEvents()
         {
-            // Toolstrip (oben)
+            // Top Toolstrip
             newBlockToolStripButton.Click += (_, __) => UiNewBlock();
             openContainerToolStripButton.Click += (_, __) => UiOpenContainer();
             saveContainerToolStripButton.Click += (_, __) => UiSaveContainer();
 
-            // Men¸ "File"
+            // File Menu
             newToolStripMenuItem.Click += (_, __) => UiNewBlock();
             openContainerToolStripMenuItem.Click += (_, __) => UiOpenContainer();
             saveContainerToolStripMenuItem.Click += (_, __) => UiSaveContainer();
             saveContainerAsToolStripMenuItem.Click += (_, __) => UiSaveContainerAs();
 
-            // Block Kontextmen¸
+            // Tools Menu: Search
+            searchInBlockToolStripMenuItem.Click += (_, __) => UiSearchInBlock();
+            searchInContainerToolStripMenuItem.Click += (_, __) => UiSearchInContainer();
+
+            // Blocks context menu
             newBlockToolStripMenuItem.Click += (_, __) => UiNewBlock();
             renameBlockToolStripMenuItem.Click += (_, __) => UiRenameBlock();
 
-            // ListView
+            // ListView selection
             lvwBlocks.SelectedIndexChanged += (_, __) => UiSelectBlockFromList();
+            lvwBlocks.DoubleClick += (_, __) => UiSelectBlockFromList();
 
-            // RTF Context Menu (Clipboard)
+            // RichTextBox context menu clipboard
             copyToolStripMenuItem1.Click += (_, __) => rtfMainText.Copy();
             pasteToolStripMenuItem1.Click += (_, __) => rtfMainText.Paste();
             cutToolStripMenuItem1.Click += (_, __) => rtfMainText.Cut();
             selectAllToolStripMenuItem1.Click += (_, __) => rtfMainText.SelectAll();
 
-            // RTF Context Menu (Format)
-            boldToolStripMenuItem.Click += (_, __) => boldToolButton_Click(boldToolButton, EventArgs.Empty);
-            italicToolStripMenuItem.Click += (_, __) => ItalicToolButton_Click(ItalicToolButton, EventArgs.Empty);
-            underlineToolStripMenuItem.Click += (_, __) => UnderlineToolButton_Click(UnderlineToolButton, EventArgs.Empty);
-            strikeToolStripMenuItem.Click += (_, __) => StrikeTroughToolButton_Click(StrikeTroughToolButton, EventArgs.Empty);
+            // RichTextBox context menu format
+            boldToolStripMenuItem.Click += (_, __) => ToggleSelectionStyle(FontStyle.Bold);
+            italicToolStripMenuItem.Click += (_, __) => ToggleSelectionStyle(FontStyle.Italic);
+            underlineToolStripMenuItem.Click += (_, __) => ToggleSelectionStyle(FontStyle.Underline);
+            strikeToolStripMenuItem.Click += (_, __) => ToggleSelectionStyle(FontStyle.Strikeout);
 
-            // Fore/Backcolor aus ContextMenu
+            // Context menu colors
             forecolorToolStripMenuItem.Click += (_, __) => foreColorToolButton_Click(foreColorToolButton, EventArgs.Empty);
             textBackgroundcolorToolStripMenuItem.Click += (_, __) => toolStripButton1_Click(backgroundColorToolButton, EventArgs.Empty);
 
-            // Dirty tracking
+            // RTF toolbar format (Designer has no Clicks)
+            boldToolButton.Click += (_, __) => ToggleSelectionStyle(FontStyle.Bold);
+            ItalicToolButton.Click += (_, __) => ToggleSelectionStyle(FontStyle.Italic);
+            UnderlineToolButton.Click += (_, __) => ToggleSelectionStyle(FontStyle.Underline);
+            StrikeTroughToolButton.Click += (_, __) => ToggleSelectionStyle(FontStyle.Strikeout);
+
+            // Font size combo
+            FontSizeComboBox.TextUpdate += FontSizeComboBox_TextUpdate;
+            FontSizeComboBox.Click += FontSizeComboBox_Click;
+
+            // Color toolbar
+            foreColorToolButton.Click += foreColorToolButton_Click;
+            backgroundColorToolButton.Click += toolStripButton1_Click;
+
+            // Clipboard toolbar
+            toolButtonCopy.Click += toolButtonCopy_Click;
+            toolButtonPaste.Click += toolButtonPaste_Click;
+            toolButtonCut.Click += toolButtonCut_Click;
+            toolButtonSelectAll.Click += toolButtonSelectAll_Click;
+
+            // Editor dirty tracking
             rtfMainText.TextChanged += (_, __) =>
             {
                 if (_loadingBlockIntoEditor) return;
@@ -170,10 +208,19 @@ namespace HSTRYDoc
                 UpdateUiState();
             };
 
-            // Close handling
+            // Update toolbar state when selection changes
+            rtfMainText.SelectionChanged += (_, __) => UpdateRtfUiFromSelection();
+
+            // Shortcuts in editor
+            rtfMainText.KeyDown += RtfMainText_KeyDown;
+
+            // Closing
             FormClosing += hsMain_FormClosing;
         }
 
+        // ============================================================
+        // UI state
+        // ============================================================
         private void UpdateUiState()
         {
             bool hasContainer = _container != null;
@@ -235,8 +282,6 @@ namespace HSTRYDoc
         // ============================================================
         // Container operations
         // ============================================================
-
-        // R¸ckgabewert: true = Container erstellt, false = abgebrochen
         private bool UiCreateNewContainer(bool initialStartup = false)
         {
             using var pwd = new PasswordDialog("Container erstellen", "Passwort f¸r den neuen Container w‰hlen:", requireConfirm: true);
@@ -257,7 +302,6 @@ namespace HSTRYDoc
                 lvwBlocks.Items.Clear();
                 ClearEditor();
                 UpdateUiState();
-
                 return true;
             }
             catch (Exception ex)
@@ -291,7 +335,6 @@ namespace HSTRYDoc
 
             if (ofd.ShowDialog(this) != DialogResult.OK) return;
 
-            // Nur versuchen zu laden, wenn es wirklich wie HSTRY aussieht
             if (!LooksLikeHstryFile(ofd.FileName))
             {
                 MessageBox.Show(this, "Die Datei ist keine g¸ltige HSTRY-Containerdatei.", "Container ˆffnen",
@@ -361,14 +404,12 @@ namespace HSTRYDoc
         {
             if (_container == null)
             {
-                // Wenn User abbricht: nichts tun
                 if (!UiCreateNewContainer()) return;
             }
 
             if (!MaybeCommitCurrentBlock()) return;
 
             string title = _container!.GenerateUniqueTitle();
-
             using (var dlg = new TextPromptDialog("Neuer Block", "Blockname:", title))
             {
                 if (dlg.ShowDialog(this) != DialogResult.OK) return;
@@ -389,7 +430,7 @@ namespace HSTRYDoc
 
             try
             {
-                var b = _container!.AddRtfDocument(title, emptyRtf ?? string.Empty);
+                var b = _container!.AddRtfDocument(title, emptyRtf);
                 _containerDirty = true;
 
                 RefreshBlockList(selectIndex: b.Index);
@@ -463,6 +504,8 @@ namespace HSTRYDoc
 
                 _currentBlockIndex = index;
                 _blockDirty = false;
+
+                UpdateRtfUiFromSelection();
             }
             catch (Exception ex)
             {
@@ -492,7 +535,7 @@ namespace HSTRYDoc
 
             if (res == DialogResult.No)
             {
-                LoadBlockIntoEditor(_currentBlockIndex); // discard
+                LoadBlockIntoEditor(_currentBlockIndex);
                 return true;
             }
 
@@ -595,121 +638,207 @@ namespace HSTRYDoc
         }
 
         // ============================================================
-        // Deine bestehenden Handler (unver‰ndert) + Exit Button
+        // Search
         // ============================================================
-        private void closeToolStripMenuItem_Click(object sender, EventArgs e)
+        private void UiSearchInBlock()
         {
-            Close();
-        }
-
-        private void foreColorToolButton_Click(object sender, EventArgs e)
-        {
-            var item = (ToolStripItem)sender;
-
-            Color current = item.Tag is Color c ? c : Color.Red;
-
-            ShowColorPickerPopup(item, current, newColor =>
+            if (_container == null || _currentBlockIndex < 0)
             {
-                item.Tag = newColor;
-
-                int selStart = rtfMainText.SelectionStart;
-                int selLen = rtfMainText.SelectionLength;
-
-                rtfMainText.SelectionColor = newColor;
-
-                rtfMainText.Focus();
-                rtfMainText.Select(selStart, selLen);
-            });
-        }
-
-        private static Point AdjustToWorkingArea(Point desired, Size size)
-        {
-            var wa = Screen.FromPoint(desired).WorkingArea;
-
-            int x = desired.X;
-            int y = desired.Y;
-
-            if (x + size.Width > wa.Right) x = wa.Right - size.Width;
-            if (x < wa.Left) x = wa.Left;
-
-            if (y + size.Height > wa.Bottom) y = wa.Bottom - size.Height;
-            if (y < wa.Top) y = wa.Top;
-
-            return new Point(x, y);
-        }
-
-        private void ShowColorPickerPopup(
-            ToolStripItem ownerItem,
-            Color currentColor,
-            Action<Color> onOk)
-        {
-            if (_colorPopup != null && !_colorPopup.IsDisposed)
-            {
-                _colorPopup.Close();
-                _colorPopup = null;
+                MessageBox.Show(this, "Kein Block geˆffnet.", "Search in Block", MessageBoxButtons.OK, MessageBoxIcon.Information);
                 return;
             }
 
-            var ts = ownerItem.Owner;
-            if (ts == null) return;
-
-            Rectangle rect = ownerItem.Bounds;
-            Point screenPos = ts.PointToScreen(new Point(rect.Left, rect.Bottom));
-
-            var dlg = new HSTRYDoc.colorPicker(currentColor)
+            using var dlg = new FindDialog
             {
-                StartPosition = FormStartPosition.Manual,
-                Location = AdjustToWorkingArea(screenPos, new Size(490, 288)),
-                CloseOnDeactivate = true,
-                TopMost = true,
-                ShowInTaskbar = false
+                StartPosition = FormStartPosition.CenterParent,
+                QueryText = string.IsNullOrWhiteSpace(_lastFindText) ? (rtfMainText.SelectedText ?? string.Empty) : _lastFindText,
+                MatchCase = _lastFindMatchCase,
+                WholeWord = _lastFindWholeWord,
+                Wrap = _lastFindWrap
             };
 
-            dlg.FormClosed += (s, args) =>
-            {
-                if (dlg.DialogResult == DialogResult.OK)
-                    onOk(dlg.SelectedColor);
+            if (dlg.ShowDialog(this) != DialogResult.OK)
+                return;
 
-                _colorPopup = null;
-                dlg.Dispose();
+            _lastFindText = dlg.QueryText ?? string.Empty;
+            _lastFindMatchCase = dlg.MatchCase;
+            _lastFindWholeWord = dlg.WholeWord;
+            _lastFindWrap = dlg.Wrap;
+
+            FindNextInEditor(_lastFindText, _lastFindMatchCase, _lastFindWholeWord, _lastFindWrap);
+        }
+
+        private void FindNextInEditor(string query, bool matchCase, bool wholeWord, bool wrap)
+        {
+            if (string.IsNullOrEmpty(query))
+                return;
+
+            RichTextBoxFinds opts = RichTextBoxFinds.None;
+            if (matchCase) opts |= RichTextBoxFinds.MatchCase;
+            if (wholeWord) opts |= RichTextBoxFinds.WholeWord;
+
+            int start = rtfMainText.SelectionStart + rtfMainText.SelectionLength;
+            int idx = rtfMainText.Find(query, start, opts);
+
+            if (idx < 0 && wrap)
+                idx = rtfMainText.Find(query, 0, opts);
+
+            if (idx < 0)
+            {
+                MessageBox.Show(this, "Kein Treffer gefunden.", "Search in Block", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                return;
+            }
+
+            rtfMainText.Select(idx, query.Length);
+            rtfMainText.ScrollToCaret();
+            rtfMainText.Focus();
+        }
+
+        private void UiSearchInContainer()
+        {
+            if (_container == null)
+            {
+                MessageBox.Show(this, "Kein Container geˆffnet.", "Search in Container", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                return;
+            }
+
+            using var dlg = new FindDialog
+            {
+                StartPosition = FormStartPosition.CenterParent,
+                Text = "Search in Container",
+                QueryText = _lastFindText,
+                MatchCase = _lastFindMatchCase,
+                WholeWord = _lastFindWholeWord,
+                Wrap = true
             };
 
-            _colorPopup = dlg;
-            dlg.Show(this);
-            dlg.BringToFront();
-            dlg.Activate();
-        }
+            if (dlg.ShowDialog(this) != DialogResult.OK)
+                return;
 
-        private void toolStripButton1_Click(object sender, EventArgs e)
-        {
-            var item = (ToolStripItem)sender;
+            string query = dlg.QueryText ?? string.Empty;
+            if (string.IsNullOrWhiteSpace(query))
+                return;
 
-            Color current = item.Tag is Color c ? c : Color.Yellow;
+            _lastFindText = query;
+            _lastFindMatchCase = dlg.MatchCase;
+            _lastFindWholeWord = dlg.WholeWord;
+            _lastFindWrap = true;
 
-            ShowColorPickerPopup(item, current, newColor =>
+            var results = new List<ContainerSearchHit>();
+            using var tmp = new RichTextBox(); // RTF -> plain text
+
+            for (int i = 0; i < _container.Blocks.Count; i++)
             {
-                item.Tag = newColor;
+                string rtf = _container.GetRtfDocument(i);
+                tmp.Rtf = rtf ?? string.Empty;
+                string text = tmp.Text ?? string.Empty;
 
-                int selStart = rtfMainText.SelectionStart;
-                int selLen = rtfMainText.SelectionLength;
+                int idx = FindIndex(text, query, dlg.MatchCase, dlg.WholeWord);
+                if (idx >= 0)
+                {
+                    string snippet = BuildSnippet(text, idx, query.Length, 40);
+                    results.Add(new ContainerSearchHit(i, _container.Blocks[i].Title, idx, snippet));
+                }
+            }
 
-                rtfMainText.SelectionBackColor = newColor;
+            if (results.Count == 0)
+            {
+                MessageBox.Show(this, "Keine Treffer im Container.", "Search in Container", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                return;
+            }
 
-                rtfMainText.Focus();
-                rtfMainText.Select(selStart, selLen);
-            });
+            using var resDlg = new ContainerSearchResultsDialog();
+            resDlg.SetResults(results);
+
+            if (resDlg.ShowDialog(this) != DialogResult.OK)
+                return;
+
+            var hit = resDlg.SelectedHit;
+            if (hit == null) return;
+
+            if (!MaybeCommitCurrentBlock())
+                return;
+
+            LoadBlockIntoEditor(hit.BlockIndex);
+            FindNextInEditor(query, dlg.MatchCase, dlg.WholeWord, wrap: true);
         }
 
-        private void toolButtonSelectAll_Click(object sender, EventArgs e) => rtfMainText.SelectAll();
-        private void toolButtonCut_Click(object sender, EventArgs e) => rtfMainText.Cut();
-        private void toolButtonPaste_Click(object sender, EventArgs e) => rtfMainText.Paste();
-        private void toolButtonCopy_Click(object sender, EventArgs e) => rtfMainText.Copy();
+        private static int FindIndex(string haystack, string needle, bool matchCase, bool wholeWord)
+        {
+            if (string.IsNullOrEmpty(needle)) return -1;
 
-        private void FontSizeComboBox_Click(object sender, EventArgs e)
+            var comparison = matchCase ? StringComparison.CurrentCulture : StringComparison.CurrentCultureIgnoreCase;
+            int idx = haystack.IndexOf(needle, comparison);
+            if (idx < 0) return -1;
+
+            if (!wholeWord) return idx;
+
+            static bool IsWordChar(char c) => char.IsLetterOrDigit(c) || c == '_' || c == 'ƒ' || c == '÷' || c == '‹' || c == '‰' || c == 'ˆ' || c == '¸' || c == 'ﬂ';
+
+            int left = idx - 1;
+            int right = idx + needle.Length;
+
+            if (left >= 0 && IsWordChar(haystack[left])) return -1;
+            if (right < haystack.Length && IsWordChar(haystack[right])) return -1;
+
+            return idx;
+        }
+
+        private static string BuildSnippet(string text, int index, int length, int context)
+        {
+            int start = Math.Max(0, index - context);
+            int end = Math.Min(text.Length, index + length + context);
+            string snippet = text.Substring(start, end - start).Replace("\r", " ").Replace("\n", " ");
+            if (start > 0) snippet = "Ö" + snippet;
+            if (end < text.Length) snippet = snippet + "Ö";
+            return snippet;
+        }
+
+        // ============================================================
+        // RTF Formatting + ColorPicker
+        // ============================================================
+        private void RtfMainText_KeyDown(object? sender, KeyEventArgs e)
+        {
+            if (e.Control && !e.Shift && e.KeyCode == Keys.F)
+            {
+                UiSearchInBlock();
+                e.Handled = true;
+                return;
+            }
+
+            if (e.Control && e.Shift && e.KeyCode == Keys.F)
+            {
+                UiSearchInContainer();
+                e.Handled = true;
+                return;
+            }
+
+            if (!e.Control && !e.Shift && e.KeyCode == Keys.F3)
+            {
+                if (!string.IsNullOrWhiteSpace(_lastFindText))
+                    FindNextInEditor(_lastFindText, _lastFindMatchCase, _lastFindWholeWord, _lastFindWrap);
+
+                e.Handled = true;
+            }
+        }
+
+        private void UpdateRtfUiFromSelection()
+        {
+            Font f = rtfMainText.SelectionFont ?? rtfMainText.Font;
+
+            boldToolButton.Checked = f.Bold;
+            ItalicToolButton.Checked = f.Italic;
+            UnderlineToolButton.Checked = f.Underline;
+            StrikeTroughToolButton.Checked = f.Strikeout;
+
+            FontSizeComboBox.Text = ((int)Math.Round(f.Size)).ToString(CultureInfo.InvariantCulture);
+        }
+
+        private void FontSizeComboBox_Click(object? sender, EventArgs e)
         {
         }
 
-        private void FontSizeComboBox_TextUpdate(object sender, EventArgs e)
+        private void FontSizeComboBox_TextUpdate(object? sender, EventArgs e)
         {
             if (sender is not ToolStripComboBox cb) return;
 
@@ -726,6 +855,7 @@ namespace HSTRYDoc
             if (size > 200f) size = 200f;
 
             ApplySelectionFontSize(rtfMainText, size);
+            UpdateRtfUiFromSelection();
         }
 
         private static void ApplySelectionFontSize(RichTextBox rtb, float newSize)
@@ -767,11 +897,6 @@ namespace HSTRYDoc
             }
         }
 
-        private void boldToolButton_Click(object sender, EventArgs e) => ToggleSelectionStyle(FontStyle.Bold);
-        private void ItalicToolButton_Click(object sender, EventArgs e) => ToggleSelectionStyle(FontStyle.Italic);
-        private void UnderlineToolButton_Click(object sender, EventArgs e) => ToggleSelectionStyle(FontStyle.Underline);
-        private void StrikeTroughToolButton_Click(object sender, EventArgs e) => ToggleSelectionStyle(FontStyle.Strikeout);
-
         private void ToggleSelectionStyle(FontStyle styleToToggle)
         {
             var rtb = rtfMainText;
@@ -785,6 +910,7 @@ namespace HSTRYDoc
                 FontStyle newStyle = baseFont.Style ^ styleToToggle;
                 rtb.SelectionFont = new Font(baseFont, newStyle);
                 rtb.Focus();
+                UpdateRtfUiFromSelection();
                 return;
             }
 
@@ -795,6 +921,7 @@ namespace HSTRYDoc
                 rtb.SelectionFont = new Font(f.FontFamily, f.Size, newStyle);
                 rtb.Select(start, len);
                 rtb.Focus();
+                UpdateRtfUiFromSelection();
                 return;
             }
 
@@ -817,7 +944,115 @@ namespace HSTRYDoc
             finally
             {
                 rtb.ResumeLayout();
+                UpdateRtfUiFromSelection();
             }
         }
+
+        private void foreColorToolButton_Click(object? sender, EventArgs e)
+        {
+            if (sender is not ToolStripItem item) return;
+
+            Color current = item.Tag is Color c ? c : Color.Red;
+
+            ShowColorPickerPopup(item, current, newColor =>
+            {
+                item.Tag = newColor;
+
+                int selStart = rtfMainText.SelectionStart;
+                int selLen = rtfMainText.SelectionLength;
+
+                rtfMainText.SelectionColor = newColor;
+
+                rtfMainText.Focus();
+                rtfMainText.Select(selStart, selLen);
+            });
+        }
+
+        private void toolStripButton1_Click(object? sender, EventArgs e)
+        {
+            if (sender is not ToolStripItem item) return;
+
+            Color current = item.Tag is Color c ? c : Color.Yellow;
+
+            ShowColorPickerPopup(item, current, newColor =>
+            {
+                item.Tag = newColor;
+
+                int selStart = rtfMainText.SelectionStart;
+                int selLen = rtfMainText.SelectionLength;
+
+                rtfMainText.SelectionBackColor = newColor;
+
+                rtfMainText.Focus();
+                rtfMainText.Select(selStart, selLen);
+            });
+        }
+
+        private static Point AdjustToWorkingArea(Point desired, Size size)
+        {
+            var wa = Screen.FromPoint(desired).WorkingArea;
+
+            int x = desired.X;
+            int y = desired.Y;
+
+            if (x + size.Width > wa.Right) x = wa.Right - size.Width;
+            if (x < wa.Left) x = wa.Left;
+
+            if (y + size.Height > wa.Bottom) y = wa.Bottom - size.Height;
+            if (y < wa.Top) y = wa.Top;
+
+            return new Point(x, y);
+        }
+
+        private void ShowColorPickerPopup(ToolStripItem ownerItem, Color currentColor, Action<Color> onOk)
+        {
+            if (_colorPopup != null && !_colorPopup.IsDisposed)
+            {
+                _colorPopup.Close();
+                _colorPopup = null;
+                return;
+            }
+
+            var ts = ownerItem.Owner;
+            if (ts == null) return;
+
+            Rectangle rect = ownerItem.Bounds;
+            Point screenPos = ts.PointToScreen(new Point(rect.Left, rect.Bottom));
+
+            var dlg = new HSTRYDoc.colorPicker(currentColor)
+            {
+                StartPosition = FormStartPosition.Manual,
+                Location = AdjustToWorkingArea(screenPos, new Size(490, 288)),
+                CloseOnDeactivate = true,
+                TopMost = true,
+                ShowInTaskbar = false
+            };
+
+            dlg.FormClosed += (s, args) =>
+            {
+                if (dlg.DialogResult == DialogResult.OK)
+                    onOk(dlg.SelectedColor);
+
+                _colorPopup = null;
+                dlg.Dispose();
+            };
+
+            _colorPopup = dlg;
+            dlg.Show(this);
+            dlg.BringToFront();
+            dlg.Activate();
+        }
+
+        private void toolButtonCopy_Click(object? sender, EventArgs e) => rtfMainText.Copy();
+        private void toolButtonPaste_Click(object? sender, EventArgs e) => rtfMainText.Paste();
+        private void toolButtonCut_Click(object? sender, EventArgs e) => rtfMainText.Cut();
+        private void toolButtonSelectAll_Click(object? sender, EventArgs e) => rtfMainText.SelectAll();
+
+        // ============================================================
+        // Required by designer (Exit)
+        // ============================================================
+        private void closeToolStripMenuItem_Click(object sender, EventArgs e) => Close();
     }
+
+    public sealed record ContainerSearchHit(int BlockIndex, string BlockTitle, int IndexInText, string Snippet);
 }

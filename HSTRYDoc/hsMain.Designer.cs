@@ -345,7 +345,7 @@
             boldToolButton.Name = "boldToolButton";
             boldToolButton.Size = new Size(23, 22);
             boldToolButton.Text = "Bold";
-            boldToolButton.Click += boldToolButton_Click;
+            
             // 
             // ItalicToolButton
             // 
@@ -355,7 +355,7 @@
             ItalicToolButton.Name = "ItalicToolButton";
             ItalicToolButton.Size = new Size(23, 22);
             ItalicToolButton.Text = "Italic";
-            ItalicToolButton.Click += ItalicToolButton_Click;
+            
             // 
             // UnderlineToolButton
             // 
@@ -365,7 +365,7 @@
             UnderlineToolButton.Name = "UnderlineToolButton";
             UnderlineToolButton.Size = new Size(23, 22);
             UnderlineToolButton.Text = "Underline";
-            UnderlineToolButton.Click += UnderlineToolButton_Click;
+            
             // 
             // StrikeTroughToolButton
             // 
@@ -375,7 +375,7 @@
             StrikeTroughToolButton.Name = "StrikeTroughToolButton";
             StrikeTroughToolButton.Size = new Size(23, 22);
             StrikeTroughToolButton.Text = "Striketrough";
-            StrikeTroughToolButton.Click += StrikeTroughToolButton_Click;
+            
             // 
             // toolStripSeparator2
             // 
@@ -388,8 +388,6 @@
             FontSizeComboBox.Name = "FontSizeComboBox";
             FontSizeComboBox.Size = new Size(75, 25);
             FontSizeComboBox.Text = "8";
-            FontSizeComboBox.TextUpdate += FontSizeComboBox_TextUpdate;
-            FontSizeComboBox.Click += FontSizeComboBox_Click;
             // 
             // toolStripSeparator3
             // 
@@ -404,7 +402,7 @@
             foreColorToolButton.Name = "foreColorToolButton";
             foreColorToolButton.Size = new Size(23, 22);
             foreColorToolButton.Text = "Forecolor";
-            foreColorToolButton.Click += foreColorToolButton_Click;
+           
             // 
             // backgroundColorToolButton
             // 
@@ -414,7 +412,7 @@
             backgroundColorToolButton.Name = "backgroundColorToolButton";
             backgroundColorToolButton.Size = new Size(23, 22);
             backgroundColorToolButton.Text = "Text-Backcolor";
-            backgroundColorToolButton.Click += toolStripButton1_Click;
+            
             // 
             // toolStripSeparator4
             // 
@@ -429,7 +427,7 @@
             toolButtonCopy.Name = "toolButtonCopy";
             toolButtonCopy.Size = new Size(23, 22);
             toolButtonCopy.Text = "Copy";
-            toolButtonCopy.Click += toolButtonCopy_Click;
+            
             // 
             // toolButtonPaste
             // 
@@ -439,7 +437,7 @@
             toolButtonPaste.Name = "toolButtonPaste";
             toolButtonPaste.Size = new Size(23, 22);
             toolButtonPaste.Text = "Paste";
-            toolButtonPaste.Click += toolButtonPaste_Click;
+            
             // 
             // toolButtonCut
             // 
@@ -449,7 +447,7 @@
             toolButtonCut.Name = "toolButtonCut";
             toolButtonCut.Size = new Size(23, 22);
             toolButtonCut.Text = "Cut";
-            toolButtonCut.Click += toolButtonCut_Click;
+            
             // 
             // toolButtonSelectAll
             // 
@@ -459,7 +457,7 @@
             toolButtonSelectAll.Name = "toolButtonSelectAll";
             toolButtonSelectAll.Size = new Size(23, 22);
             toolButtonSelectAll.Text = "Select All";
-            toolButtonSelectAll.Click += toolButtonSelectAll_Click;
+            
             // 
             // mainMenu
             // 
