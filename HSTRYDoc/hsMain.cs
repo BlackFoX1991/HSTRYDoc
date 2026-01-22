@@ -1,5 +1,7 @@
-// hsMain.cs (FULL)
-// NOTE: Only UI strings/messages were translated to English. Logic and structure remain unchanged.
+// hsMain.cs (FULL, inline)
+// - Chooser is shown on startup if no valid "Open with..." file was loaded
+// - NO automatic creation of a new container on startup
+// - ALL user-facing texts/messages are English (logic unchanged)
 
 using System.Globalization;
 using System.IO;
@@ -36,10 +38,10 @@ namespace HSTRYDoc
         {
             WireUiEvents();
 
-            // Startup: "Open with..." or create new container
+            // Startup: "Open with..." OR show Chooser (do NOT auto-create)
             if (!TryOpenFromCommandLineOrShell())
             {
-                if (!UiCreateNewContainer(initialStartup: true))
+                if (!RunChooserStartup())
                 {
                     Close();
                     return;
@@ -48,6 +50,52 @@ namespace HSTRYDoc
 
             UpdateUiState();
             UpdateRtfUiFromSelection();
+        }
+
+        // ============================================================
+        // Chooser Startup
+        // ============================================================
+        private bool RunChooserStartup()
+        {
+            // Show chooser until a container is created/loaded or the user exits
+            while (_container == null)
+            {
+                using var chooser = new Chooser
+                {
+                    StartPosition = FormStartPosition.CenterParent
+                };
+
+                var dr = chooser.ShowDialog(this);
+
+                // Exit (DialogResult.Cancel)
+                if (dr == DialogResult.Cancel)
+                    return false;
+
+                // New (DialogResult.Yes)
+                if (dr == DialogResult.Yes)
+                {
+                    if (UiCreateNewContainer(initialStartup: true))
+                        return true;
+
+                    // user cancelled -> show chooser again
+                    continue;
+                }
+
+                // Open (DialogResult.No)
+                if (dr == DialogResult.No)
+                {
+                    if (TryOpenContainerInteractive())
+                        return true;
+
+                    // user cancelled / invalid / error -> show chooser again
+                    continue;
+                }
+
+                // Fallback: close
+                return false;
+            }
+
+            return true;
         }
 
         // ============================================================
@@ -75,6 +123,7 @@ namespace HSTRYDoc
 
         private static bool LooksLikeHstryFile(string path)
         {
+            // Minimal validation: magic bytes at file start
             try
             {
                 using var fs = File.OpenRead(path);
@@ -166,7 +215,7 @@ namespace HSTRYDoc
             forecolorToolStripMenuItem.Click += (_, __) => foreColorToolButton_Click(foreColorToolButton, EventArgs.Empty);
             textBackgroundcolorToolStripMenuItem.Click += (_, __) => toolStripButton1_Click(backgroundColorToolButton, EventArgs.Empty);
 
-            // RTF toolbar format (Designer has no Clicks)
+            // RTF toolbar format
             boldToolButton.Click += (_, __) => ToggleSelectionStyle(FontStyle.Bold);
             ItalicToolButton.Click += (_, __) => ToggleSelectionStyle(FontStyle.Italic);
             UnderlineToolButton.Click += (_, __) => ToggleSelectionStyle(FontStyle.Underline);
@@ -301,9 +350,10 @@ namespace HSTRYDoc
             }
         }
 
-        private void UiOpenContainer()
+        // bool helper for Chooser (Open)
+        private bool TryOpenContainerInteractive()
         {
-            if (!MaybeCommitCurrentBlock()) return;
+            if (!MaybeCommitCurrentBlock()) return false;
 
             if (_containerDirty)
             {
@@ -314,7 +364,7 @@ namespace HSTRYDoc
                     MessageBoxButtons.YesNo,
                     MessageBoxIcon.Warning);
 
-                if (res != DialogResult.Yes) return;
+                if (res != DialogResult.Yes) return false;
             }
 
             using var ofd = new OpenFileDialog
@@ -323,16 +373,21 @@ namespace HSTRYDoc
                 CheckFileExists = true
             };
 
-            if (ofd.ShowDialog(this) != DialogResult.OK) return;
+            if (ofd.ShowDialog(this) != DialogResult.OK) return false;
 
             if (!LooksLikeHstryFile(ofd.FileName))
             {
                 MessageBox.Show(this, "The selected file is not a valid HSTRY container file.", "Open container",
                     MessageBoxButtons.OK, MessageBoxIcon.Warning);
-                return;
+                return false;
             }
 
-            OpenContainerFromPath(ofd.FileName);
+            return OpenContainerFromPath(ofd.FileName);
+        }
+
+        private void UiOpenContainer()
+        {
+            _ = TryOpenContainerInteractive();
         }
 
         private bool UiSaveContainer()
@@ -563,6 +618,7 @@ namespace HSTRYDoc
                     string hashHex = Convert.ToHexString(_container.ComputeBlockHash(b));
                     string size = ByteFormat.ToHumanSize(b.StoredSizeBytes);
 
+                    // keep your requested format dd.MM.yyyy HH:mm:ss:ffffff
                     string created = b.CreatedUtc.ToLocalTime().ToString("dd.MM.yyyy HH:mm:ss:ffffff");
                     string changed = b.ModifiedUtc.ToLocalTime().ToString("dd.MM.yyyy HH:mm:ss:ffffff");
 
@@ -763,7 +819,10 @@ namespace HSTRYDoc
 
             if (!wholeWord) return idx;
 
-            static bool IsWordChar(char c) => char.IsLetterOrDigit(c) || c == '_' || c == 'Ä' || c == 'Ö' || c == 'Ü' || c == 'ä' || c == 'ö' || c == 'ü' || c == 'ß';
+            static bool IsWordChar(char c) =>
+                char.IsLetterOrDigit(c) || c == '_' ||
+                c == 'Ä' || c == 'Ö' || c == 'Ü' ||
+                c == 'ä' || c == 'ö' || c == 'ü' || c == 'ß';
 
             int left = idx - 1;
             int right = idx + needle.Length;

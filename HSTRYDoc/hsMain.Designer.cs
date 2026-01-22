@@ -45,6 +45,9 @@
             colSize = new ColumnHeader();
             colCreated = new ColumnHeader();
             colChanged = new ColumnHeader();
+            ctxBlocks = new ContextMenuStrip(components);
+            newBlockToolStripMenuItem = new ToolStripMenuItem();
+            renameBlockToolStripMenuItem = new ToolStripMenuItem();
             rtfMainText = new RichTextBox();
             ctxRtf = new ContextMenuStrip(components);
             copyToolStripMenuItem1 = new ToolStripMenuItem();
@@ -92,19 +95,16 @@
             ContainerPropertiesToolStripMenuItem = new ToolStripMenuItem();
             helpToolStripMenuItem = new ToolStripMenuItem();
             aboutToolStripMenuItem = new ToolStripMenuItem();
-            ctxBlocks = new ContextMenuStrip(components);
-            newBlockToolStripMenuItem = new ToolStripMenuItem();
-            renameBlockToolStripMenuItem = new ToolStripMenuItem();
             mainToolstrip.SuspendLayout();
             statusStrip1.SuspendLayout();
             ((System.ComponentModel.ISupportInitialize)splitContainer1).BeginInit();
             splitContainer1.Panel1.SuspendLayout();
             splitContainer1.Panel2.SuspendLayout();
             splitContainer1.SuspendLayout();
+            ctxBlocks.SuspendLayout();
             ctxRtf.SuspendLayout();
             toolStripRtf.SuspendLayout();
             mainMenu.SuspendLayout();
-            ctxBlocks.SuspendLayout();
             SuspendLayout();
             // 
             // mainToolstrip
@@ -200,6 +200,7 @@
             lvwBlocks.GridLines = true;
             lvwBlocks.HeaderStyle = ColumnHeaderStyle.Nonclickable;
             lvwBlocks.Location = new Point(0, 0);
+            lvwBlocks.MultiSelect = false;
             lvwBlocks.Name = "lvwBlocks";
             lvwBlocks.Size = new Size(404, 589);
             lvwBlocks.TabIndex = 0;
@@ -226,6 +227,26 @@
             // colChanged
             // 
             colChanged.Text = "Changed";
+            // 
+            // ctxBlocks
+            // 
+            ctxBlocks.Items.AddRange(new ToolStripItem[] { newBlockToolStripMenuItem, renameBlockToolStripMenuItem });
+            ctxBlocks.Name = "ctxBlocks";
+            ctxBlocks.Size = new Size(159, 48);
+            // 
+            // newBlockToolStripMenuItem
+            // 
+            newBlockToolStripMenuItem.Image = (Image)resources.GetObject("newBlockToolStripMenuItem.Image");
+            newBlockToolStripMenuItem.Name = "newBlockToolStripMenuItem";
+            newBlockToolStripMenuItem.Size = new Size(158, 22);
+            newBlockToolStripMenuItem.Text = "New Block...";
+            // 
+            // renameBlockToolStripMenuItem
+            // 
+            renameBlockToolStripMenuItem.Image = (Image)resources.GetObject("renameBlockToolStripMenuItem.Image");
+            renameBlockToolStripMenuItem.Name = "renameBlockToolStripMenuItem";
+            renameBlockToolStripMenuItem.Size = new Size(158, 22);
+            renameBlockToolStripMenuItem.Text = "Rename Block...";
             // 
             // rtfMainText
             // 
@@ -345,7 +366,6 @@
             boldToolButton.Name = "boldToolButton";
             boldToolButton.Size = new Size(23, 22);
             boldToolButton.Text = "Bold";
-            
             // 
             // ItalicToolButton
             // 
@@ -355,7 +375,6 @@
             ItalicToolButton.Name = "ItalicToolButton";
             ItalicToolButton.Size = new Size(23, 22);
             ItalicToolButton.Text = "Italic";
-            
             // 
             // UnderlineToolButton
             // 
@@ -365,7 +384,6 @@
             UnderlineToolButton.Name = "UnderlineToolButton";
             UnderlineToolButton.Size = new Size(23, 22);
             UnderlineToolButton.Text = "Underline";
-            
             // 
             // StrikeTroughToolButton
             // 
@@ -375,7 +393,6 @@
             StrikeTroughToolButton.Name = "StrikeTroughToolButton";
             StrikeTroughToolButton.Size = new Size(23, 22);
             StrikeTroughToolButton.Text = "Striketrough";
-            
             // 
             // toolStripSeparator2
             // 
@@ -402,7 +419,6 @@
             foreColorToolButton.Name = "foreColorToolButton";
             foreColorToolButton.Size = new Size(23, 22);
             foreColorToolButton.Text = "Forecolor";
-           
             // 
             // backgroundColorToolButton
             // 
@@ -412,7 +428,6 @@
             backgroundColorToolButton.Name = "backgroundColorToolButton";
             backgroundColorToolButton.Size = new Size(23, 22);
             backgroundColorToolButton.Text = "Text-Backcolor";
-            
             // 
             // toolStripSeparator4
             // 
@@ -427,7 +442,6 @@
             toolButtonCopy.Name = "toolButtonCopy";
             toolButtonCopy.Size = new Size(23, 22);
             toolButtonCopy.Text = "Copy";
-            
             // 
             // toolButtonPaste
             // 
@@ -437,7 +451,6 @@
             toolButtonPaste.Name = "toolButtonPaste";
             toolButtonPaste.Size = new Size(23, 22);
             toolButtonPaste.Text = "Paste";
-            
             // 
             // toolButtonCut
             // 
@@ -447,7 +460,6 @@
             toolButtonCut.Name = "toolButtonCut";
             toolButtonCut.Size = new Size(23, 22);
             toolButtonCut.Text = "Cut";
-            
             // 
             // toolButtonSelectAll
             // 
@@ -457,7 +469,6 @@
             toolButtonSelectAll.Name = "toolButtonSelectAll";
             toolButtonSelectAll.Size = new Size(23, 22);
             toolButtonSelectAll.Text = "Select All";
-            
             // 
             // mainMenu
             // 
@@ -479,32 +490,32 @@
             // 
             newToolStripMenuItem.Image = (Image)resources.GetObject("newToolStripMenuItem.Image");
             newToolStripMenuItem.Name = "newToolStripMenuItem";
-            newToolStripMenuItem.Size = new Size(180, 22);
+            newToolStripMenuItem.Size = new Size(178, 22);
             newToolStripMenuItem.Text = "New Block...";
             // 
             // toolStripMenuItem1
             // 
             toolStripMenuItem1.Name = "toolStripMenuItem1";
-            toolStripMenuItem1.Size = new Size(177, 6);
+            toolStripMenuItem1.Size = new Size(175, 6);
             // 
             // saveContainerToolStripMenuItem
             // 
             saveContainerToolStripMenuItem.Image = (Image)resources.GetObject("saveContainerToolStripMenuItem.Image");
             saveContainerToolStripMenuItem.Name = "saveContainerToolStripMenuItem";
-            saveContainerToolStripMenuItem.Size = new Size(180, 22);
+            saveContainerToolStripMenuItem.Size = new Size(178, 22);
             saveContainerToolStripMenuItem.Text = "Save Container...";
             // 
             // saveContainerAsToolStripMenuItem
             // 
             saveContainerAsToolStripMenuItem.Name = "saveContainerAsToolStripMenuItem";
-            saveContainerAsToolStripMenuItem.Size = new Size(180, 22);
+            saveContainerAsToolStripMenuItem.Size = new Size(178, 22);
             saveContainerAsToolStripMenuItem.Text = "Save Container As...";
             // 
             // openContainerToolStripMenuItem
             // 
             openContainerToolStripMenuItem.Image = (Image)resources.GetObject("openContainerToolStripMenuItem.Image");
             openContainerToolStripMenuItem.Name = "openContainerToolStripMenuItem";
-            openContainerToolStripMenuItem.Size = new Size(180, 22);
+            openContainerToolStripMenuItem.Size = new Size(178, 22);
             openContainerToolStripMenuItem.Text = "Open Container...";
             // 
             // exportBlockToolStripMenuItem
@@ -512,7 +523,7 @@
             exportBlockToolStripMenuItem.DropDownItems.AddRange(new ToolStripItem[] { PDFExportToolStripMenuItem, RTFExportToolStripMenuItem });
             exportBlockToolStripMenuItem.Image = (Image)resources.GetObject("exportBlockToolStripMenuItem.Image");
             exportBlockToolStripMenuItem.Name = "exportBlockToolStripMenuItem";
-            exportBlockToolStripMenuItem.Size = new Size(180, 22);
+            exportBlockToolStripMenuItem.Size = new Size(178, 22);
             exportBlockToolStripMenuItem.Text = "Export Block...";
             // 
             // PDFExportToolStripMenuItem
@@ -530,13 +541,13 @@
             // toolStripMenuItem2
             // 
             toolStripMenuItem2.Name = "toolStripMenuItem2";
-            toolStripMenuItem2.Size = new Size(177, 6);
+            toolStripMenuItem2.Size = new Size(175, 6);
             // 
             // closeToolStripMenuItem
             // 
             closeToolStripMenuItem.Image = (Image)resources.GetObject("closeToolStripMenuItem.Image");
             closeToolStripMenuItem.Name = "closeToolStripMenuItem";
-            closeToolStripMenuItem.Size = new Size(180, 22);
+            closeToolStripMenuItem.Size = new Size(178, 22);
             closeToolStripMenuItem.Text = "Exit";
             closeToolStripMenuItem.Click += closeToolStripMenuItem_Click;
             // 
@@ -582,26 +593,6 @@
             aboutToolStripMenuItem.Size = new Size(116, 22);
             aboutToolStripMenuItem.Text = "About...";
             // 
-            // ctxBlocks
-            // 
-            ctxBlocks.Items.AddRange(new ToolStripItem[] { newBlockToolStripMenuItem, renameBlockToolStripMenuItem });
-            ctxBlocks.Name = "ctxBlocks";
-            ctxBlocks.Size = new Size(159, 48);
-            // 
-            // newBlockToolStripMenuItem
-            // 
-            newBlockToolStripMenuItem.Image = (Image)resources.GetObject("newBlockToolStripMenuItem.Image");
-            newBlockToolStripMenuItem.Name = "newBlockToolStripMenuItem";
-            newBlockToolStripMenuItem.Size = new Size(158, 22);
-            newBlockToolStripMenuItem.Text = "New Block...";
-            // 
-            // renameBlockToolStripMenuItem
-            // 
-            renameBlockToolStripMenuItem.Image = (Image)resources.GetObject("renameBlockToolStripMenuItem.Image");
-            renameBlockToolStripMenuItem.Name = "renameBlockToolStripMenuItem";
-            renameBlockToolStripMenuItem.Size = new Size(158, 22);
-            renameBlockToolStripMenuItem.Text = "Rename Block...";
-            // 
             // hsMain
             // 
             AutoScaleDimensions = new SizeF(7F, 15F);
@@ -625,12 +616,12 @@
             splitContainer1.Panel2.PerformLayout();
             ((System.ComponentModel.ISupportInitialize)splitContainer1).EndInit();
             splitContainer1.ResumeLayout(false);
+            ctxBlocks.ResumeLayout(false);
             ctxRtf.ResumeLayout(false);
             toolStripRtf.ResumeLayout(false);
             toolStripRtf.PerformLayout();
             mainMenu.ResumeLayout(false);
             mainMenu.PerformLayout();
-            ctxBlocks.ResumeLayout(false);
             ResumeLayout(false);
             PerformLayout();
         }
