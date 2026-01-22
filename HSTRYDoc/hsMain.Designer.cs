@@ -85,14 +85,11 @@
             saveContainerAsToolStripMenuItem = new ToolStripMenuItem();
             openContainerToolStripMenuItem = new ToolStripMenuItem();
             exportBlockToolStripMenuItem = new ToolStripMenuItem();
-            PDFExportToolStripMenuItem = new ToolStripMenuItem();
-            RTFExportToolStripMenuItem = new ToolStripMenuItem();
             toolStripMenuItem2 = new ToolStripSeparator();
             closeToolStripMenuItem = new ToolStripMenuItem();
             toolsToolStripMenuItem = new ToolStripMenuItem();
             searchInBlockToolStripMenuItem = new ToolStripMenuItem();
             searchInContainerToolStripMenuItem = new ToolStripMenuItem();
-            ContainerPropertiesToolStripMenuItem = new ToolStripMenuItem();
             helpToolStripMenuItem = new ToolStripMenuItem();
             aboutToolStripMenuItem = new ToolStripMenuItem();
             mainToolstrip.SuspendLayout();
@@ -520,23 +517,11 @@
             // 
             // exportBlockToolStripMenuItem
             // 
-            exportBlockToolStripMenuItem.DropDownItems.AddRange(new ToolStripItem[] { PDFExportToolStripMenuItem, RTFExportToolStripMenuItem });
             exportBlockToolStripMenuItem.Image = (Image)resources.GetObject("exportBlockToolStripMenuItem.Image");
             exportBlockToolStripMenuItem.Name = "exportBlockToolStripMenuItem";
-            exportBlockToolStripMenuItem.Size = new Size(178, 22);
-            exportBlockToolStripMenuItem.Text = "Export Block...";
-            // 
-            // PDFExportToolStripMenuItem
-            // 
-            PDFExportToolStripMenuItem.Name = "PDFExportToolStripMenuItem";
-            PDFExportToolStripMenuItem.Size = new Size(127, 22);
-            PDFExportToolStripMenuItem.Text = "PDF-File...";
-            // 
-            // RTFExportToolStripMenuItem
-            // 
-            RTFExportToolStripMenuItem.Name = "RTFExportToolStripMenuItem";
-            RTFExportToolStripMenuItem.Size = new Size(127, 22);
-            RTFExportToolStripMenuItem.Text = "RTF-File...";
+            exportBlockToolStripMenuItem.Size = new Size(180, 22);
+            exportBlockToolStripMenuItem.Text = "Export Blocks...";
+            exportBlockToolStripMenuItem.Click += exportBlockToolStripMenuItem_Click;
             // 
             // toolStripMenuItem2
             // 
@@ -553,7 +538,7 @@
             // 
             // toolsToolStripMenuItem
             // 
-            toolsToolStripMenuItem.DropDownItems.AddRange(new ToolStripItem[] { searchInBlockToolStripMenuItem, searchInContainerToolStripMenuItem, ContainerPropertiesToolStripMenuItem });
+            toolsToolStripMenuItem.DropDownItems.AddRange(new ToolStripItem[] { searchInBlockToolStripMenuItem, searchInContainerToolStripMenuItem });
             toolsToolStripMenuItem.Name = "toolsToolStripMenuItem";
             toolsToolStripMenuItem.Size = new Size(47, 20);
             toolsToolStripMenuItem.Text = "Tools";
@@ -571,13 +556,6 @@
             searchInContainerToolStripMenuItem.Name = "searchInContainerToolStripMenuItem";
             searchInContainerToolStripMenuItem.Size = new Size(191, 22);
             searchInContainerToolStripMenuItem.Text = "Search in Container...";
-            // 
-            // ContainerPropertiesToolStripMenuItem
-            // 
-            ContainerPropertiesToolStripMenuItem.Image = (Image)resources.GetObject("ContainerPropertiesToolStripMenuItem.Image");
-            ContainerPropertiesToolStripMenuItem.Name = "ContainerPropertiesToolStripMenuItem";
-            ContainerPropertiesToolStripMenuItem.Size = new Size(191, 22);
-            ContainerPropertiesToolStripMenuItem.Text = "Container Properties...";
             // 
             // helpToolStripMenuItem
             // 
@@ -654,13 +632,10 @@
         private ToolStripMenuItem toolsToolStripMenuItem;
         private ToolStripMenuItem searchInBlockToolStripMenuItem;
         private ToolStripMenuItem searchInContainerToolStripMenuItem;
-        private ToolStripMenuItem ContainerPropertiesToolStripMenuItem;
         private ToolStripMenuItem helpToolStripMenuItem;
         private ToolStripMenuItem aboutToolStripMenuItem;
         private ToolStripStatusLabel ContainerSizeLabel;
         private ToolStripMenuItem exportBlockToolStripMenuItem;
-        private ToolStripMenuItem PDFExportToolStripMenuItem;
-        private ToolStripMenuItem RTFExportToolStripMenuItem;
         private ContextMenuStrip ctxRtf;
         private ToolStripMenuItem copyToolStripMenuItem1;
         private ToolStripMenuItem pasteToolStripMenuItem1;

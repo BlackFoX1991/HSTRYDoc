@@ -1101,6 +1101,28 @@ namespace HSTRYDoc
         // Required by designer (Exit)
         // ============================================================
         private void closeToolStripMenuItem_Click(object sender, EventArgs e) => Close();
+
+        private void exportBlockToolStripMenuItem_Click(object sender, EventArgs e)
+        {
+            if (_container == null)
+            {
+                MessageBox.Show(this, "No container is currently open.", "Export blocks",
+                    MessageBoxButtons.OK, MessageBoxIcon.Information);
+                return;
+            }
+
+            // Apply pending edits (if any) before exporting
+            if (!MaybeCommitCurrentBlock())
+                return;
+
+            using var dlg = new exporterDiag(_container)
+            {
+                StartPosition = FormStartPosition.CenterParent
+            };
+
+            dlg.ShowDialog(this);
+        }
+
     }
 
     public sealed record ContainerSearchHit(int BlockIndex, string BlockTitle, int IndexInText, string Snippet);

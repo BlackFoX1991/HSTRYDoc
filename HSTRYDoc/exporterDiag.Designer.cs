@@ -47,8 +47,9 @@
             btnExport = new Button();
             btnCancel = new Button();
             grpOutput = new GroupBox();
-            textBox1 = new TextBox();
-            button1 = new Button();
+            txtOutput = new TextBox();
+            btnChoose = new Button();
+            prgExport = new ProgressBar();
             panel1.SuspendLayout();
             panel2.SuspendLayout();
             panel3.SuspendLayout();
@@ -69,6 +70,7 @@
             // 
             // panel2
             // 
+            panel2.Controls.Add(prgExport);
             panel2.Controls.Add(btnCancel);
             panel2.Controls.Add(btnExport);
             panel2.Dock = DockStyle.Bottom;
@@ -215,8 +217,8 @@
             // 
             // grpOutput
             // 
-            grpOutput.Controls.Add(textBox1);
-            grpOutput.Controls.Add(button1);
+            grpOutput.Controls.Add(txtOutput);
+            grpOutput.Controls.Add(btnChoose);
             grpOutput.Dock = DockStyle.Fill;
             grpOutput.Location = new Point(15, 203);
             grpOutput.Name = "grpOutput";
@@ -226,26 +228,35 @@
             grpOutput.TabStop = false;
             grpOutput.Text = "Output";
             // 
-            // textBox1
+            // txtOutput
             // 
-            textBox1.BorderStyle = BorderStyle.FixedSingle;
-            textBox1.Dock = DockStyle.Fill;
-            textBox1.Location = new Point(25, 41);
-            textBox1.Multiline = true;
-            textBox1.Name = "textBox1";
-            textBox1.ReadOnly = true;
-            textBox1.Size = new Size(189, 28);
-            textBox1.TabIndex = 0;
+            txtOutput.BorderStyle = BorderStyle.FixedSingle;
+            txtOutput.Dock = DockStyle.Fill;
+            txtOutput.Location = new Point(25, 41);
+            txtOutput.Multiline = true;
+            txtOutput.Name = "txtOutput";
+            txtOutput.ReadOnly = true;
+            txtOutput.Size = new Size(226, 28);
+            txtOutput.TabIndex = 0;
             // 
-            // button1
+            // btnChoose
             // 
-            button1.Dock = DockStyle.Right;
-            button1.Location = new Point(214, 41);
-            button1.Name = "button1";
-            button1.Size = new Size(65, 28);
-            button1.TabIndex = 1;
-            button1.Text = "button1";
-            button1.UseVisualStyleBackColor = true;
+            btnChoose.Dock = DockStyle.Right;
+            btnChoose.FlatStyle = FlatStyle.Popup;
+            btnChoose.Location = new Point(251, 41);
+            btnChoose.Name = "btnChoose";
+            btnChoose.Size = new Size(28, 28);
+            btnChoose.TabIndex = 1;
+            btnChoose.Text = "...";
+            btnChoose.UseVisualStyleBackColor = true;
+            // 
+            // prgExport
+            // 
+            prgExport.Location = new Point(18, 18);
+            prgExport.Name = "prgExport";
+            prgExport.Size = new Size(401, 26);
+            prgExport.TabIndex = 2;
+            prgExport.Visible = false;
             // 
             // exporterDiag
             // 
@@ -286,9 +297,10 @@
         private ColumnHeader colChanged;
         private Label label1;
         private GroupBox grpOutput;
-        private TextBox textBox1;
-        private Button button1;
+        private TextBox txtOutput;
+        private Button btnChoose;
         private Button btnCancel;
         private Button btnExport;
+        private ProgressBar prgExport;
     }
 }
