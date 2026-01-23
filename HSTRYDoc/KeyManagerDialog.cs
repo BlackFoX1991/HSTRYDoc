@@ -1,0 +1,606 @@
+﻿// KeyManagerDialog.cs
+using System;
+using System.Globalization;
+using System.IO;
+using System.Linq;
+using System.Security.Cryptography;
+using System.Windows.Forms;
+using System.Drawing;
+
+namespace HSTRYDoc
+{
+    public partial class KeyManagerDialog : Form
+    {
+        private readonly HSTRYContainer _container;
+        private readonly string _containerPath;
+
+        private RSA? _myPrivateKey;
+        private string? _myKeyIdHex;
+        private bool _isOwnerKeyLoaded;
+
+        public string? SelectedPrivateKeyPath { get; private set; }
+        public bool ContainerChanged { get; private set; }
+
+        public KeyManagerDialog(HSTRYContainer container, string containerPath, string? currentPrivateKeyPath)
+        {
+            InitializeComponent();
+
+            _container = container ?? throw new ArgumentNullException(nameof(container));
+            _containerPath = containerPath ?? string.Empty;
+
+            SelectedPrivateKeyPath = currentPrivateKeyPath;
+
+            btnBrowsePriv.Click += (_, __) => UiBrowsePrivateKey();
+            btnCreateKeyPair.Click += (_, __) => UiCreateKeyPairForSharing();
+            btnExportPublic.Click += (_, __) => UiExportPublicKey();
+            btnTransferOwnership.Click += (_, __) => UiTransferOwnership();
+
+            btnAddMyself.Click += (_, __) => UiAddMyselfAsRecipient();
+            btnAddRecipient.Click += (_, __) => UiAddRecipient();
+            btnRemoveRecipient.Click += (_, __) => UiRemoveSelectedRecipient();
+            btnCopyKeyId.Click += (_, __) => UiCopySelectedKeyId();
+
+            btnOk.Click += (_, __) => { DialogResult = DialogResult.OK; Close(); };
+            btnCancel.Click += (_, __) => { DialogResult = DialogResult.Cancel; Close(); };
+
+            // Drag & drop public keys onto recipients list
+            lvwRecipients.AllowDrop = true;
+            lvwRecipients.DragEnter += LvwRecipients_DragEnter;
+            lvwRecipients.DragDrop += LvwRecipients_DragDrop;
+
+            RefreshRecipientsList();
+
+            if (!string.IsNullOrWhiteSpace(SelectedPrivateKeyPath) && File.Exists(SelectedPrivateKeyPath))
+                TryLoadMyPrivateKey(SelectedPrivateKeyPath!, showErrors: false);
+            else
+                UpdateMyKeyUi(null, null);
+
+            UpdateMyRecipientStatusAndPermissions();
+        }
+
+        private static string DefaultPrivPath(string containerPath) => Path.ChangeExtension(containerPath, ".hstrypriv");
+        private static string DefaultPubPath(string containerPath) => Path.ChangeExtension(containerPath, ".hstrypub");
+
+        private void LvwRecipients_DragEnter(object? sender, DragEventArgs e)
+        {
+            if (!_isOwnerKeyLoaded)
+            {
+                e.Effect = DragDropEffects.None;
+                return;
+            }
+
+            if (e.Data?.GetDataPresent(DataFormats.FileDrop) == true)
+                e.Effect = DragDropEffects.Copy;
+        }
+
+        private void LvwRecipients_DragDrop(object? sender, DragEventArgs e)
+        {
+            if (!_isOwnerKeyLoaded || _myPrivateKey == null)
+                return;
+
+            if (e.Data?.GetData(DataFormats.FileDrop) is not string[] files || files.Length == 0)
+                return;
+
+            int added = 0;
+
+            foreach (var f in files)
+            {
+                if (!File.Exists(f)) continue;
+                if (!string.Equals(Path.GetExtension(f), ".hstrypub", StringComparison.OrdinalIgnoreCase))
+                    continue;
+
+                try
+                {
+                    using var pub = HSTRYContainer.RsaKeyFiles.LoadPublicKeySpki(f);
+                    _container.AddRecipient(_myPrivateKey, pub);
+                    added++;
+                    ContainerChanged = true;
+                }
+                catch
+                {
+                    // ignore per-file failures
+                }
+            }
+
+            if (added > 0)
+            {
+                RefreshRecipientsList();
+                UpdateMyRecipientStatusAndPermissions();
+            }
+        }
+
+        private void UiBrowsePrivateKey()
+        {
+            using var ofd = new OpenFileDialog
+            {
+                Filter = "HSTRY Private Key (*.hstrypriv)|*.hstrypriv|All files (*.*)|*.*",
+                CheckFileExists = true,
+                Title = "Select private key"
+            };
+
+            if (ofd.ShowDialog(this) != DialogResult.OK)
+                return;
+
+            TryLoadMyPrivateKey(ofd.FileName, showErrors: true);
+            UpdateMyRecipientStatusAndPermissions();
+        }
+
+        private void TryLoadMyPrivateKey(string path, bool showErrors)
+        {
+            try
+            {
+                _myPrivateKey?.Dispose();
+                _myPrivateKey = HSTRYContainer.RsaKeyFiles.LoadPrivateKeyPkcs8(path);
+
+                byte[] keyId = HSTRYContainer.RsaKeyFiles.ComputeKeyIdFromPublicKey(_myPrivateKey);
+                _myKeyIdHex = Convert.ToHexString(keyId);
+
+                SelectedPrivateKeyPath = path;
+
+                _isOwnerKeyLoaded = IsOwnerPrivateKey(_myPrivateKey);
+
+                UpdateMyKeyUi(path, _myKeyIdHex);
+            }
+            catch (Exception ex)
+            {
+                _myPrivateKey?.Dispose();
+                _myPrivateKey = null;
+                _myKeyIdHex = null;
+                _isOwnerKeyLoaded = false;
+
+                UpdateMyKeyUi(path, "");
+
+                if (showErrors)
+                    MessageBox.Show(this, ex.Message, "Load private key", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
+        }
+
+        private bool IsOwnerPrivateKey(RSA priv)
+        {
+            try
+            {
+                byte[] spki = priv.ExportSubjectPublicKeyInfo();
+                return spki.SequenceEqual(_container.OwnerPublicKeySpki);
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        private void UpdateMyKeyUi(string? path, string? keyIdHex)
+        {
+            txtPrivateKeyPath.Text = path ?? string.Empty;
+            txtMyKeyId.Text = keyIdHex ?? string.Empty;
+
+            btnExportPublic.Enabled = _myPrivateKey != null;
+            btnTransferOwnership.Enabled = _myPrivateKey != null; // will be refined in UpdateMyRecipientStatusAndPermissions
+        }
+
+        // ============================================================
+        // Create new keypair (this is how you "create a new public key")
+        // ============================================================
+        private void UiCreateKeyPairForSharing()
+        {
+            // This generates a keypair and saves:
+            // - private: *.hstrypriv
+            // - public : *.hstrypub
+            // You can then distribute the .hstrypub file.
+
+            using var sfd = new SaveFileDialog
+            {
+                Filter = "HSTRY Private Key (*.hstrypriv)|*.hstrypriv|All files (*.*)|*.*",
+                DefaultExt = "hstrypriv",
+                AddExtension = true,
+                FileName = "recipient.hstrypriv",
+                Title = "Save new private key"
+            };
+
+            if (sfd.ShowDialog(this) != DialogResult.OK)
+                return;
+
+            string privPath = sfd.FileName;
+            string pubPath = Path.ChangeExtension(privPath, ".hstrypub");
+
+            bool overwrite = File.Exists(privPath) || File.Exists(pubPath);
+            if (overwrite)
+            {
+                var res = MessageBox.Show(
+                    this,
+                    "Key files already exist. Overwrite them?",
+                    "Create key pair",
+                    MessageBoxButtons.YesNo,
+                    MessageBoxIcon.Warning,
+                    MessageBoxDefaultButton.Button2);
+
+                if (res != DialogResult.Yes)
+                    return;
+            }
+
+            try
+            {
+                using var rsa = HSTRYContainer.RsaKeyFiles.CreateNewKeyPair(3072);
+                HSTRYContainer.RsaKeyFiles.SavePrivateKeyPkcs8(privPath, rsa);
+                HSTRYContainer.RsaKeyFiles.SavePublicKeySpki(pubPath, rsa);
+
+                // Offer: add this new public key as recipient (requires owner)
+                var res = MessageBox.Show(
+                    this,
+                    "Key pair created.\n\nDo you want to add the new public key as a recipient now?",
+                    "Create key pair",
+                    MessageBoxButtons.YesNo,
+                    MessageBoxIcon.Question,
+                    MessageBoxDefaultButton.Button1);
+
+                if (res == DialogResult.Yes)
+                {
+                    if (_myPrivateKey == null || !_isOwnerKeyLoaded)
+                    {
+                        MessageBox.Show(this, "Load the owner private key to modify recipients.", "Create key pair",
+                            MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    }
+                    else
+                    {
+                        using var pub = HSTRYContainer.RsaKeyFiles.LoadPublicKeySpki(pubPath);
+                        _container.AddRecipient(_myPrivateKey, pub);
+                        ContainerChanged = true;
+                        RefreshRecipientsList();
+                        UpdateMyRecipientStatusAndPermissions();
+                    }
+                }
+
+                MessageBox.Show(this,
+                    "Key pair created successfully.\n\nYou can share the .hstrypub file with other users.",
+                    "Create key pair",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Information);
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show(this, ex.Message, "Create key pair", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
+        }
+
+        private void UiExportPublicKey()
+        {
+            if (_myPrivateKey == null)
+            {
+                MessageBox.Show(this, "No private key is loaded.", "Export public key",
+                    MessageBoxButtons.OK, MessageBoxIcon.Information);
+                return;
+            }
+
+            string defaultPub = !string.IsNullOrWhiteSpace(SelectedPrivateKeyPath)
+                ? Path.ChangeExtension(SelectedPrivateKeyPath, ".hstrypub")
+                : DefaultPubPath(_containerPath);
+
+            using var sfd = new SaveFileDialog
+            {
+                Filter = "HSTRY Public Key (*.hstrypub)|*.hstrypub|All files (*.*)|*.*",
+                DefaultExt = "hstrypub",
+                AddExtension = true,
+                FileName = Path.GetFileName(defaultPub),
+                Title = "Export public key"
+            };
+
+            if (sfd.ShowDialog(this) != DialogResult.OK)
+                return;
+
+            try
+            {
+                HSTRYContainer.RsaKeyFiles.SavePublicKeySpki(sfd.FileName, _myPrivateKey);
+                MessageBox.Show(this, "Public key exported successfully.", "Export public key",
+                    MessageBoxButtons.OK, MessageBoxIcon.Information);
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show(this, ex.Message, "Export public key", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
+        }
+
+        // ============================================================
+        // Ownership transfer (Option B)
+        // ============================================================
+        private void UiTransferOwnership()
+        {
+            if (_myPrivateKey == null)
+            {
+                MessageBox.Show(this, "No private key is loaded.", "Transfer ownership",
+                    MessageBoxButtons.OK, MessageBoxIcon.Information);
+                return;
+            }
+
+            if (!_isOwnerKeyLoaded)
+            {
+                MessageBox.Show(this, "You must load the current owner private key to transfer ownership.", "Transfer ownership",
+                    MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
+
+            var confirm = MessageBox.Show(
+                this,
+                "This will transfer container ownership to a NEW key pair.\n\nContinue?",
+                "Transfer ownership",
+                MessageBoxButtons.YesNo,
+                MessageBoxIcon.Warning,
+                MessageBoxDefaultButton.Button2);
+
+            if (confirm != DialogResult.Yes)
+                return;
+
+            using var sfd = new SaveFileDialog
+            {
+                Filter = "HSTRY Private Key (*.hstrypriv)|*.hstrypriv|All files (*.*)|*.*",
+                DefaultExt = "hstrypriv",
+                AddExtension = true,
+                FileName = "new_owner.hstrypriv",
+                Title = "Save new owner private key"
+            };
+
+            if (sfd.ShowDialog(this) != DialogResult.OK)
+                return;
+
+            string newPrivPath = sfd.FileName;
+            string newPubPath = Path.ChangeExtension(newPrivPath, ".hstrypub");
+
+            bool overwrite = File.Exists(newPrivPath) || File.Exists(newPubPath);
+            if (overwrite)
+            {
+                var res = MessageBox.Show(
+                    this,
+                    "Owner key files already exist. Overwrite them?",
+                    "Transfer ownership",
+                    MessageBoxButtons.YesNo,
+                    MessageBoxIcon.Warning,
+                    MessageBoxDefaultButton.Button2);
+
+                if (res != DialogResult.Yes)
+                    return;
+            }
+
+            try
+            {
+                using var newOwner = HSTRYContainer.RsaKeyFiles.CreateNewKeyPair(3072);
+
+                HSTRYContainer.RsaKeyFiles.SavePrivateKeyPkcs8(newPrivPath, newOwner);
+                HSTRYContainer.RsaKeyFiles.SavePublicKeySpki(newPubPath, newOwner);
+
+                // Transfer ownership inside the container (re-sign header)
+                _container.TransferOwnership(_myPrivateKey, newOwner, ensureNewOwnerIsRecipient: true);
+                ContainerChanged = true;
+
+                // Switch UI to the new owner key automatically
+                TryLoadMyPrivateKey(newPrivPath, showErrors: true);
+                RefreshRecipientsList();
+                UpdateMyRecipientStatusAndPermissions();
+
+                MessageBox.Show(this,
+                    "Ownership transferred successfully.\n\nThe new owner key pair has been saved to disk.",
+                    "Transfer ownership",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Information);
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show(this, ex.Message, "Transfer ownership", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
+        }
+
+
+
+        // ============================================================
+        // Recipient operations (owner-only)
+        // ============================================================
+        private void UiAddMyselfAsRecipient()
+        {
+            if (_myPrivateKey == null || string.IsNullOrWhiteSpace(_myKeyIdHex))
+            {
+                MessageBox.Show(this, "No private key is loaded.", "Add myself",
+                    MessageBoxButtons.OK, MessageBoxIcon.Information);
+                return;
+            }
+
+            if (!_isOwnerKeyLoaded)
+            {
+                MessageBox.Show(this, "You must load the owner private key to modify recipients.", "Add myself",
+                    MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
+
+            bool included = _container.Recipients.Any(r => Convert.ToHexString(r.KeyId)
+                .Equals(_myKeyIdHex, StringComparison.OrdinalIgnoreCase));
+
+            if (included)
+            {
+                UpdateMyRecipientStatusAndPermissions();
+                return;
+            }
+
+            try
+            {
+                using var pub = CreatePublicOnlyFromPrivate(_myPrivateKey);
+                _container.AddRecipient(_myPrivateKey, pub);
+
+                ContainerChanged = true;
+                RefreshRecipientsList();
+                UpdateMyRecipientStatusAndPermissions();
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show(this, ex.Message, "Add myself", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
+        }
+
+        private static RSA CreatePublicOnlyFromPrivate(RSA priv)
+        {
+            byte[] spki = priv.ExportSubjectPublicKeyInfo();
+            var rsa = RSA.Create();
+            rsa.ImportSubjectPublicKeyInfo(spki, out _);
+            return rsa;
+        }
+
+        private void UiAddRecipient()
+        {
+            if (_myPrivateKey == null || !_isOwnerKeyLoaded)
+            {
+                MessageBox.Show(this, "You must load the owner private key to modify recipients.", "Add recipient",
+                    MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
+
+            using var ofd = new OpenFileDialog
+            {
+                Filter = "HSTRY Public Key (*.hstrypub)|*.hstrypub|All files (*.*)|*.*",
+                CheckFileExists = true,
+                Title = "Select recipient public key"
+            };
+
+            if (ofd.ShowDialog(this) != DialogResult.OK)
+                return;
+
+            try
+            {
+                using var pub = HSTRYContainer.RsaKeyFiles.LoadPublicKeySpki(ofd.FileName);
+                _container.AddRecipient(_myPrivateKey, pub);
+
+                ContainerChanged = true;
+                RefreshRecipientsList();
+                UpdateMyRecipientStatusAndPermissions();
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show(this, ex.Message, "Add recipient", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
+        }
+
+        private void UiRemoveSelectedRecipient()
+        {
+            if (lvwRecipients.SelectedItems.Count == 0)
+                return;
+
+            if (_myPrivateKey == null || !_isOwnerKeyLoaded)
+            {
+                MessageBox.Show(this, "You must load the owner private key to modify recipients.", "Remove recipient",
+                    MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
+
+            string keyIdHex = lvwRecipients.SelectedItems[0].Text;
+
+            var res = MessageBox.Show(
+                this,
+                "Remove the selected recipient from this container?",
+                "Remove recipient",
+                MessageBoxButtons.YesNo,
+                MessageBoxIcon.Warning,
+                MessageBoxDefaultButton.Button2);
+
+            if (res != DialogResult.Yes)
+                return;
+
+            try
+            {
+                if (_container.RemoveRecipientByKeyIdHex(_myPrivateKey, keyIdHex))
+                {
+                    ContainerChanged = true;
+                    RefreshRecipientsList();
+                    UpdateMyRecipientStatusAndPermissions();
+                }
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show(this, ex.Message, "Remove recipient", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
+        }
+
+        private void UiCopySelectedKeyId()
+        {
+            if (lvwRecipients.SelectedItems.Count == 0)
+                return;
+
+            string keyIdHex = lvwRecipients.SelectedItems[0].Text;
+            try { Clipboard.SetText(keyIdHex); } catch { /* ignore */ }
+        }
+
+        private void RefreshRecipientsList()
+        {
+            lvwRecipients.BeginUpdate();
+            try
+            {
+                lvwRecipients.Items.Clear();
+
+                foreach (var r in _container.Recipients)
+                {
+                    string keyIdHex = Convert.ToHexString(r.KeyId);
+                    string alg = r.Alg == 1 ? "RSA-OAEP-SHA256" : $"Alg-{r.Alg}";
+                    string len = (r.WrappedDek?.Length ?? 0).ToString(CultureInfo.InvariantCulture);
+
+                    var it = new ListViewItem(keyIdHex);
+                    it.SubItems.Add(alg);
+                    it.SubItems.Add(len);
+                    lvwRecipients.Items.Add(it);
+                }
+            }
+            finally
+            {
+                lvwRecipients.EndUpdate();
+            }
+        }
+
+        private void UpdateMyRecipientStatusAndPermissions()
+        {
+            bool hasKey = _myPrivateKey != null && !string.IsNullOrWhiteSpace(_myKeyIdHex);
+
+            bool included = hasKey && _container.Recipients.Any(r =>
+                Convert.ToHexString(r.KeyId).Equals(_myKeyIdHex!, StringComparison.OrdinalIgnoreCase));
+
+            bool canModify = hasKey && _isOwnerKeyLoaded;
+
+            btnAddRecipient.Enabled = canModify;
+            btnRemoveRecipient.Enabled = canModify;
+            btnAddMyself.Enabled = canModify && !included;
+            btnTransferOwnership.Enabled = canModify; // only owner can transfer
+
+            if (!hasKey)
+            {
+                lblMyRecipientStatus.Text = "No private key loaded";
+                lblMyRecipientStatus.ForeColor = SystemColors.ControlText;
+                return;
+            }
+
+            if (canModify)
+            {
+                if (included)
+                {
+                    lblMyRecipientStatus.Text = "Owner key loaded. Your key is included as a recipient.";
+                    lblMyRecipientStatus.ForeColor = Color.DarkGreen;
+                }
+                else
+                {
+                    lblMyRecipientStatus.Text = "Owner key loaded, but your key is NOT a recipient. You can add yourself.";
+                    lblMyRecipientStatus.ForeColor = Color.DarkRed;
+                }
+            }
+            else
+            {
+                if (included)
+                {
+                    lblMyRecipientStatus.Text = "Recipient key loaded (read-only). You are not the owner.";
+                    lblMyRecipientStatus.ForeColor = Color.DarkGoldenrod;
+                }
+                else
+                {
+                    lblMyRecipientStatus.Text = "Key loaded, but it is not a recipient and not the owner.";
+                    lblMyRecipientStatus.ForeColor = Color.DarkRed;
+                }
+            }
+        }
+
+        protected override void OnFormClosed(FormClosedEventArgs e)
+        {
+            base.OnFormClosed(e);
+            _myPrivateKey?.Dispose();
+            _myPrivateKey = null;
+        }
+    }
+}

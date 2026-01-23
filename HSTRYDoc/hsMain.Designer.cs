@@ -48,6 +48,7 @@
             ctxBlocks = new ContextMenuStrip(components);
             newBlockToolStripMenuItem = new ToolStripMenuItem();
             renameBlockToolStripMenuItem = new ToolStripMenuItem();
+            removeBlockToolStripMenuItem = new ToolStripMenuItem();
             rtfMainText = new RichTextBox();
             ctxRtf = new ContextMenuStrip(components);
             copyToolStripMenuItem1 = new ToolStripMenuItem();
@@ -69,6 +70,12 @@
             StrikeTroughToolButton = new ToolStripButton();
             toolStripSeparator2 = new ToolStripSeparator();
             FontSizeComboBox = new ToolStripComboBox();
+            btnFontSizeMns = new ToolStripButton();
+            btnFontSizePls = new ToolStripButton();
+            dropDownHeader = new ToolStripSplitButton();
+            heading1ToolStripMenuItem = new ToolStripMenuItem();
+            heading2ToolStripMenuItem = new ToolStripMenuItem();
+            heading3ToolStripMenuItem = new ToolStripMenuItem();
             toolStripSeparator3 = new ToolStripSeparator();
             foreColorToolButton = new ToolStripButton();
             backgroundColorToolButton = new ToolStripButton();
@@ -77,6 +84,8 @@
             toolButtonPaste = new ToolStripButton();
             toolButtonCut = new ToolStripButton();
             toolButtonSelectAll = new ToolStripButton();
+            toolStripSeparator1 = new ToolStripSeparator();
+            toolTableInsert = new ToolStripButton();
             mainMenu = new MenuStrip();
             fileToolStripMenuItem = new ToolStripMenuItem();
             newToolStripMenuItem = new ToolStripMenuItem();
@@ -92,6 +101,8 @@
             searchInContainerToolStripMenuItem = new ToolStripMenuItem();
             helpToolStripMenuItem = new ToolStripMenuItem();
             aboutToolStripMenuItem = new ToolStripMenuItem();
+            InactiveIcon = new NotifyIcon(components);
+            keyManagementToolStripMenuItem = new ToolStripMenuItem();
             mainToolstrip.SuspendLayout();
             statusStrip1.SuspendLayout();
             ((System.ComponentModel.ISupportInitialize)splitContainer1).BeginInit();
@@ -185,6 +196,7 @@
             // 
             splitContainer1.Panel2.Controls.Add(rtfMainText);
             splitContainer1.Panel2.Controls.Add(toolStripRtf);
+            splitContainer1.Panel2.Enabled = false;
             splitContainer1.Size = new Size(1022, 589);
             splitContainer1.SplitterDistance = 404;
             splitContainer1.TabIndex = 3;
@@ -228,9 +240,9 @@
             // 
             // ctxBlocks
             // 
-            ctxBlocks.Items.AddRange(new ToolStripItem[] { newBlockToolStripMenuItem, renameBlockToolStripMenuItem });
+            ctxBlocks.Items.AddRange(new ToolStripItem[] { newBlockToolStripMenuItem, renameBlockToolStripMenuItem, removeBlockToolStripMenuItem });
             ctxBlocks.Name = "ctxBlocks";
-            ctxBlocks.Size = new Size(159, 48);
+            ctxBlocks.Size = new Size(159, 70);
             // 
             // newBlockToolStripMenuItem
             // 
@@ -245,6 +257,13 @@
             renameBlockToolStripMenuItem.Name = "renameBlockToolStripMenuItem";
             renameBlockToolStripMenuItem.Size = new Size(158, 22);
             renameBlockToolStripMenuItem.Text = "Rename Block...";
+            // 
+            // removeBlockToolStripMenuItem
+            // 
+            removeBlockToolStripMenuItem.Image = (Image)resources.GetObject("removeBlockToolStripMenuItem.Image");
+            removeBlockToolStripMenuItem.Name = "removeBlockToolStripMenuItem";
+            removeBlockToolStripMenuItem.Size = new Size(158, 22);
+            removeBlockToolStripMenuItem.Text = "Remove Block";
             // 
             // rtfMainText
             // 
@@ -349,7 +368,7 @@
             // 
             // toolStripRtf
             // 
-            toolStripRtf.Items.AddRange(new ToolStripItem[] { boldToolButton, ItalicToolButton, UnderlineToolButton, StrikeTroughToolButton, toolStripSeparator2, FontSizeComboBox, toolStripSeparator3, foreColorToolButton, backgroundColorToolButton, toolStripSeparator4, toolButtonCopy, toolButtonPaste, toolButtonCut, toolButtonSelectAll });
+            toolStripRtf.Items.AddRange(new ToolStripItem[] { boldToolButton, ItalicToolButton, UnderlineToolButton, StrikeTroughToolButton, toolStripSeparator2, FontSizeComboBox, btnFontSizeMns, btnFontSizePls, dropDownHeader, toolStripSeparator3, foreColorToolButton, backgroundColorToolButton, toolStripSeparator4, toolButtonCopy, toolButtonPaste, toolButtonCut, toolButtonSelectAll, toolStripSeparator1, toolTableInsert });
             toolStripRtf.Location = new Point(0, 0);
             toolStripRtf.Name = "toolStripRtf";
             toolStripRtf.Size = new Size(614, 25);
@@ -403,6 +422,59 @@
             FontSizeComboBox.Name = "FontSizeComboBox";
             FontSizeComboBox.Size = new Size(75, 25);
             FontSizeComboBox.Text = "8";
+            FontSizeComboBox.TextChanged += FontSizeComboBox_TextChanged;
+            // 
+            // btnFontSizeMns
+            // 
+            btnFontSizeMns.DisplayStyle = ToolStripItemDisplayStyle.Image;
+            btnFontSizeMns.Image = (Image)resources.GetObject("btnFontSizeMns.Image");
+            btnFontSizeMns.ImageTransparentColor = Color.Magenta;
+            btnFontSizeMns.Name = "btnFontSizeMns";
+            btnFontSizeMns.Size = new Size(23, 22);
+            btnFontSizeMns.Text = "Font Size ( - )";
+            // 
+            // btnFontSizePls
+            // 
+            btnFontSizePls.DisplayStyle = ToolStripItemDisplayStyle.Image;
+            btnFontSizePls.Image = (Image)resources.GetObject("btnFontSizePls.Image");
+            btnFontSizePls.ImageTransparentColor = Color.Magenta;
+            btnFontSizePls.Name = "btnFontSizePls";
+            btnFontSizePls.Size = new Size(23, 22);
+            btnFontSizePls.Text = "Font Size (+)";
+            // 
+            // dropDownHeader
+            // 
+            dropDownHeader.DisplayStyle = ToolStripItemDisplayStyle.Image;
+            dropDownHeader.DropDownItems.AddRange(new ToolStripItem[] { heading1ToolStripMenuItem, heading2ToolStripMenuItem, heading3ToolStripMenuItem });
+            dropDownHeader.Image = (Image)resources.GetObject("dropDownHeader.Image");
+            dropDownHeader.ImageTransparentColor = Color.Magenta;
+            dropDownHeader.Name = "dropDownHeader";
+            dropDownHeader.Size = new Size(32, 22);
+            dropDownHeader.Text = "Heading";
+            // 
+            // heading1ToolStripMenuItem
+            // 
+            heading1ToolStripMenuItem.Image = (Image)resources.GetObject("heading1ToolStripMenuItem.Image");
+            heading1ToolStripMenuItem.Name = "heading1ToolStripMenuItem";
+            heading1ToolStripMenuItem.Size = new Size(128, 22);
+            heading1ToolStripMenuItem.Text = "Heading 1";
+            heading1ToolStripMenuItem.Click += heading1ToolStripMenuItem_Click;
+            // 
+            // heading2ToolStripMenuItem
+            // 
+            heading2ToolStripMenuItem.Image = (Image)resources.GetObject("heading2ToolStripMenuItem.Image");
+            heading2ToolStripMenuItem.Name = "heading2ToolStripMenuItem";
+            heading2ToolStripMenuItem.Size = new Size(128, 22);
+            heading2ToolStripMenuItem.Text = "Heading 2";
+            heading2ToolStripMenuItem.Click += heading2ToolStripMenuItem_Click;
+            // 
+            // heading3ToolStripMenuItem
+            // 
+            heading3ToolStripMenuItem.Image = (Image)resources.GetObject("heading3ToolStripMenuItem.Image");
+            heading3ToolStripMenuItem.Name = "heading3ToolStripMenuItem";
+            heading3ToolStripMenuItem.Size = new Size(128, 22);
+            heading3ToolStripMenuItem.Text = "Heading 3";
+            heading3ToolStripMenuItem.Click += heading3ToolStripMenuItem_Click;
             // 
             // toolStripSeparator3
             // 
@@ -467,6 +539,21 @@
             toolButtonSelectAll.Name = "toolButtonSelectAll";
             toolButtonSelectAll.Size = new Size(23, 22);
             toolButtonSelectAll.Text = "Select All";
+            // 
+            // toolStripSeparator1
+            // 
+            toolStripSeparator1.Name = "toolStripSeparator1";
+            toolStripSeparator1.Size = new Size(6, 25);
+            // 
+            // toolTableInsert
+            // 
+            toolTableInsert.DisplayStyle = ToolStripItemDisplayStyle.Image;
+            toolTableInsert.Image = (Image)resources.GetObject("toolTableInsert.Image");
+            toolTableInsert.ImageTransparentColor = Color.Magenta;
+            toolTableInsert.Name = "toolTableInsert";
+            toolTableInsert.Size = new Size(23, 22);
+            toolTableInsert.Text = "Insert Table...";
+            toolTableInsert.Click += toolTableInsert_Click;
             // 
             // mainMenu
             // 
@@ -539,7 +626,7 @@
             // 
             // toolsToolStripMenuItem
             // 
-            toolsToolStripMenuItem.DropDownItems.AddRange(new ToolStripItem[] { searchInBlockToolStripMenuItem, searchInContainerToolStripMenuItem });
+            toolsToolStripMenuItem.DropDownItems.AddRange(new ToolStripItem[] { searchInBlockToolStripMenuItem, searchInContainerToolStripMenuItem, keyManagementToolStripMenuItem });
             toolsToolStripMenuItem.Name = "toolsToolStripMenuItem";
             toolsToolStripMenuItem.Size = new Size(47, 20);
             toolsToolStripMenuItem.Text = "Tools";
@@ -569,9 +656,23 @@
             // 
             aboutToolStripMenuItem.Image = (Image)resources.GetObject("aboutToolStripMenuItem.Image");
             aboutToolStripMenuItem.Name = "aboutToolStripMenuItem";
-            aboutToolStripMenuItem.Size = new Size(180, 22);
+            aboutToolStripMenuItem.Size = new Size(116, 22);
             aboutToolStripMenuItem.Text = "About...";
             aboutToolStripMenuItem.Click += aboutToolStripMenuItem_Click;
+            // 
+            // InactiveIcon
+            // 
+            InactiveIcon.Icon = (Icon)resources.GetObject("InactiveIcon.Icon");
+            InactiveIcon.Text = "notifyIcon1";
+            InactiveIcon.Visible = true;
+            // 
+            // keyManagementToolStripMenuItem
+            // 
+            keyManagementToolStripMenuItem.Image = (Image)resources.GetObject("keyManagementToolStripMenuItem.Image");
+            keyManagementToolStripMenuItem.Name = "keyManagementToolStripMenuItem";
+            keyManagementToolStripMenuItem.Size = new Size(186, 22);
+            keyManagementToolStripMenuItem.Text = "Key Management";
+            keyManagementToolStripMenuItem.Click += keyManagementToolStripMenuItem_Click;
             // 
             // hsMain
             // 
@@ -669,5 +770,16 @@
         private ContextMenuStrip ctxBlocks;
         private ToolStripMenuItem newBlockToolStripMenuItem;
         private ToolStripMenuItem renameBlockToolStripMenuItem;
+        private NotifyIcon InactiveIcon;
+        private ToolStripButton btnFontSizeMns;
+        private ToolStripButton btnFontSizePls;
+        private ToolStripSplitButton dropDownHeader;
+        private ToolStripMenuItem heading1ToolStripMenuItem;
+        private ToolStripMenuItem heading2ToolStripMenuItem;
+        private ToolStripMenuItem heading3ToolStripMenuItem;
+        private ToolStripMenuItem removeBlockToolStripMenuItem;
+        private ToolStripSeparator toolStripSeparator1;
+        private ToolStripButton toolTableInsert;
+        private ToolStripMenuItem keyManagementToolStripMenuItem;
     }
 }
