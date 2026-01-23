@@ -18,7 +18,6 @@ using System.Collections.Generic;
 using System.Drawing;
 using System.Text;
 using System.Windows.Forms;
-using System.Security.Cryptography;
 
 namespace HSTRYDoc
 {
@@ -26,6 +25,9 @@ namespace HSTRYDoc
     {
         private HSTRYDoc.colorPicker? _colorPopup;
         private bool _suppressBlockSelectionChanged = false;
+
+
+        private bool _updatingFontSizeUi = false;
 
         private readonly AppState _appState = AppState.Load();
 
@@ -68,7 +70,7 @@ namespace HSTRYDoc
             WireUiEvents();
             InitAutoComplete();
 
-            EnsureDefaultKeyPair(); // <--- NEW
+            EnsureDefaultKeyPair();
 
             // Startup: "Open with..." OR show Chooser (do NOT auto-create)
             if (!TryOpenFromCommandLineOrShell())
@@ -82,7 +84,6 @@ namespace HSTRYDoc
 
             UpdateUiState();
             UpdateRtfUiFromSelection();
-
             RebuildAutoCompleteWordsFromEditor();
         }
 
@@ -101,6 +102,7 @@ namespace HSTRYDoc
                 Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
                 "HSTRYDoc",
                 "Security_Keys");
+
             Directory.CreateDirectory(fallback);
             return fallback;
         }
@@ -510,7 +512,6 @@ namespace HSTRYDoc
                 _appState.Save();
 
                 RebuildAutoCompleteWordsFromEditor();
-
                 return true;
             }
             catch (Exception ex)
@@ -560,6 +561,8 @@ namespace HSTRYDoc
             italicToolStripMenuItem.Click += (_, __) => ToggleSelectionStyle(FontStyle.Italic);
             underlineToolStripMenuItem.Click += (_, __) => ToggleSelectionStyle(FontStyle.Underline);
             strikeToolStripMenuItem.Click += (_, __) => ToggleSelectionStyle(FontStyle.Strikeout);
+
+
 
             // Context menu colors
             forecolorToolStripMenuItem.Click += (_, __) => foreColorToolButton_Click(foreColorToolButton, EventArgs.Empty);
@@ -778,10 +781,7 @@ namespace HSTRYDoc
             return OpenContainerFromPath(ofd.FileName);
         }
 
-        private void UiOpenContainer()
-        {
-            _ = TryOpenContainerInteractive();
-        }
+        private void UiOpenContainer() => _ = TryOpenContainerInteractive();
 
         private bool UiSaveContainer()
         {
@@ -985,14 +985,8 @@ namespace HSTRYDoc
             if (!MaybeCommitCurrentBlockBeforeSwitch())
             {
                 _suppressBlockSelectionChanged = true;
-                try
-                {
-                    SelectListIndex(_currentBlockIndex);
-                }
-                finally
-                {
-                    _suppressBlockSelectionChanged = false;
-                }
+                try { SelectListIndex(_currentBlockIndex); }
+                finally { _suppressBlockSelectionChanged = false; }
                 return;
             }
 
@@ -1197,7 +1191,8 @@ namespace HSTRYDoc
         {
             if (_container == null || _currentBlockIndex < 0)
             {
-                MessageBox.Show(this, "No block is currently open.", "Search in block", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                MessageBox.Show(this, "No block is currently open.", "Search in block",
+                    MessageBoxButtons.OK, MessageBoxIcon.Information);
                 return;
             }
 
@@ -1221,37 +1216,12 @@ namespace HSTRYDoc
             FindNextInEditor(_lastFindText, _lastFindMatchCase, _lastFindWholeWord, _lastFindWrap);
         }
 
-        private void FindNextInEditor(string query, bool matchCase, bool wholeWord, bool wrap)
-        {
-            if (string.IsNullOrEmpty(query))
-                return;
-
-            RichTextBoxFinds opts = RichTextBoxFinds.None;
-            if (matchCase) opts |= RichTextBoxFinds.MatchCase;
-            if (wholeWord) opts |= RichTextBoxFinds.WholeWord;
-
-            int start = rtfMainText.SelectionStart + rtfMainText.SelectionLength;
-            int idx = rtfMainText.Find(query, start, opts);
-
-            if (idx < 0 && wrap)
-                idx = rtfMainText.Find(query, 0, opts);
-
-            if (idx < 0)
-            {
-                MessageBox.Show(this, "No matches found.", "Search in block", MessageBoxButtons.OK, MessageBoxIcon.Information);
-                return;
-            }
-
-            rtfMainText.Select(idx, query.Length);
-            rtfMainText.ScrollToCaret();
-            rtfMainText.Focus();
-        }
-
         private void UiSearchInContainer()
         {
             if (_container == null)
             {
-                MessageBox.Show(this, "No container is currently open.", "Search in container", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                MessageBox.Show(this, "No container is currently open.", "Search in container",
+                    MessageBoxButtons.OK, MessageBoxIcon.Information);
                 return;
             }
 
@@ -1296,7 +1266,8 @@ namespace HSTRYDoc
 
             if (results.Count == 0)
             {
-                MessageBox.Show(this, "No matches were found in the container.", "Search in container", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                MessageBox.Show(this, "No matches were found in the container.", "Search in container",
+                    MessageBoxButtons.OK, MessageBoxIcon.Information);
                 return;
             }
 
@@ -1314,6 +1285,33 @@ namespace HSTRYDoc
 
             LoadBlockIntoEditor(hit.BlockIndex);
             FindNextInEditor(query, dlg.MatchCase, dlg.WholeWord, wrap: true);
+        }
+
+        private void FindNextInEditor(string query, bool matchCase, bool wholeWord, bool wrap)
+        {
+            if (string.IsNullOrEmpty(query))
+                return;
+
+            RichTextBoxFinds opts = RichTextBoxFinds.None;
+            if (matchCase) opts |= RichTextBoxFinds.MatchCase;
+            if (wholeWord) opts |= RichTextBoxFinds.WholeWord;
+
+            int start = rtfMainText.SelectionStart + rtfMainText.SelectionLength;
+            int idx = rtfMainText.Find(query, start, opts);
+
+            if (idx < 0 && wrap)
+                idx = rtfMainText.Find(query, 0, opts);
+
+            if (idx < 0)
+            {
+                MessageBox.Show(this, "No matches found.", "Search",
+                    MessageBoxButtons.OK, MessageBoxIcon.Information);
+                return;
+            }
+
+            rtfMainText.Select(idx, query.Length);
+            rtfMainText.ScrollToCaret();
+            rtfMainText.Focus();
         }
 
         private static int FindIndex(string haystack, string needle, bool matchCase, bool wholeWord)
@@ -1351,7 +1349,7 @@ namespace HSTRYDoc
         }
 
         // ============================================================
-        // RTF Formatting + Clipboard + Shortcuts (unchanged from your version)
+        // RTF Formatting + Clipboard + Shortcuts
         // ============================================================
         private void RtfMainText_KeyDown(object? sender, KeyEventArgs e)
         {
@@ -1387,42 +1385,63 @@ namespace HSTRYDoc
             UnderlineToolButton.Checked = f.Underline;
             StrikeTroughToolButton.Checked = f.Strikeout;
 
-            FontSizeComboBox.Text = ((int)Math.Round(f.Size)).ToString(CultureInfo.InvariantCulture);
+            _updatingFontSizeUi = true;
+            try
+            {
+                FontSizeComboBox.Text = ((int)Math.Round(f.Size)).ToString(CultureInfo.InvariantCulture);
+            }
+            finally
+            {
+                _updatingFontSizeUi = false;
+            }
         }
+
 
         private void FontSizeComboBox_Click(object? sender, EventArgs e) { }
 
         private void FontSizeComboBox_TextUpdate(object? sender, EventArgs e)
         {
+            if (_updatingFontSizeUi) return;
             if (sender is not ToolStripComboBox cb) return;
 
-            string raw = (cb.Text ?? string.Empty).Trim().Replace("pt", "", StringComparison.OrdinalIgnoreCase);
+            string raw = (cb.Text ?? string.Empty).Trim()
+                .Replace("pt", "", StringComparison.OrdinalIgnoreCase);
 
             if (!float.TryParse(raw, NumberStyles.Float, CultureInfo.CurrentCulture, out float size) &&
                 !float.TryParse(raw.Replace(',', '.'), NumberStyles.Float, CultureInfo.InvariantCulture, out size))
+            {
                 return;
+            }
 
-            size = Math.Clamp(size, 1f, 200f);
+            if (size < 1f) size = 1f;
+            if (size > 200f) size = 200f;
 
             ApplySelectionFontSize(rtfMainText, size);
             UpdateRtfUiFromSelection();
         }
 
-        private void FontSizeComboBox_TextChanged(object? sender, EventArgs e)
+
+        private void FontSizeComboBox_TextChanged(object sender, EventArgs e)
         {
+            if (_updatingFontSizeUi) return;
             if (sender is not ToolStripComboBox cb) return;
 
-            string raw = (cb.Text ?? string.Empty).Trim().Replace("pt", "", StringComparison.OrdinalIgnoreCase);
+            string raw = (cb.Text ?? string.Empty).Trim()
+                .Replace("pt", "", StringComparison.OrdinalIgnoreCase);
 
             if (!float.TryParse(raw, NumberStyles.Float, CultureInfo.CurrentCulture, out float size) &&
                 !float.TryParse(raw.Replace(',', '.'), NumberStyles.Float, CultureInfo.InvariantCulture, out size))
+            {
                 return;
+            }
 
-            size = Math.Clamp(size, 1f, 200f);
+            if (size < 1f) size = 1f;
+            if (size > 200f) size = 200f;
 
             ApplySelectionFontSize(rtfMainText, size);
             UpdateRtfUiFromSelection();
         }
+
 
         private static void ApplySelectionFontSize(RichTextBox rtb, float newSize)
         {
@@ -1655,13 +1674,38 @@ namespace HSTRYDoc
         private void heading2ToolStripMenuItem_Click(object sender, EventArgs e) => ApplyHeadingSize(rtfMainText, H2_SIZE, FontStyle.Bold);
         private void heading3ToolStripMenuItem_Click(object sender, EventArgs e) => ApplyHeadingSize(rtfMainText, H3_SIZE, FontStyle.Bold);
 
+        // SAFE: preserves mixed formatting by applying per-character
         private static void ApplyHeadingSize(RichTextBox rtb, float size, FontStyle addStyle)
         {
             if (rtb == null) return;
 
-            Font baseFont = rtb.SelectionFont ?? rtb.Font;
-            FontStyle newStyle = baseFont.Style | addStyle;
-            rtb.SelectionFont = new Font(baseFont.FontFamily, size, newStyle);
+            int start = rtb.SelectionStart;
+            int len = rtb.SelectionLength;
+
+            if (len == 0)
+            {
+                Font baseFont = rtb.SelectionFont ?? rtb.Font;
+                rtb.SelectionFont = new Font(baseFont.FontFamily, size, baseFont.Style | addStyle);
+                return;
+            }
+
+            rtb.SuspendLayout();
+            try
+            {
+                for (int i = 0; i < len; i++)
+                {
+                    rtb.Select(start + i, 1);
+                    Font f = rtb.SelectionFont ?? rtb.Font;
+                    rtb.SelectionFont = new Font(f.FontFamily, size, f.Style | addStyle);
+                }
+
+                rtb.Select(start, len);
+                rtb.Focus();
+            }
+            finally
+            {
+                rtb.ResumeLayout();
+            }
         }
 
         private void toolTableInsert_Click(object sender, EventArgs e)
@@ -1853,7 +1897,7 @@ namespace HSTRYDoc
 
         private static int FindRowEndTokenEnd(string rtf, int rowTokenIndex)
         {
-            int i = rowTokenIndex + 4;
+            int i = rowTokenIndex + 4; // "\row"
             while (i < rtf.Length && char.IsWhiteSpace(rtf[i]))
                 i++;
             return i;
@@ -1936,11 +1980,6 @@ namespace HSTRYDoc
                 if (!TryModifyRowColumns(rowSeg, ctx.ColIndex, add, out string modifiedRow, out int newColCount))
                 {
                     modifiedRow = rowSeg;
-                }
-                else
-                {
-                    if (!add && newColCount <= 0)
-                        modifiedRow = rowSeg;
                 }
 
                 sb.Append(modifiedRow);
@@ -2025,7 +2064,7 @@ namespace HSTRYDoc
                 int removePos = colIndex;
 
                 int removedWidth = cellx[removePos] - (removePos == 0 ? 0 : cellx[removePos - 1]);
-                if (removedWidth <= 0) removedWidth = 0;
+                if (removedWidth < 0) removedWidth = 0;
 
                 var newCellx = new int[colCount - 1];
                 for (int i = 0; i < removePos; i++)
@@ -2120,10 +2159,10 @@ namespace HSTRYDoc
             return sb.ToString();
         }
 
-        private void keyManagementToolStripMenuItem_Click(object sender, EventArgs e)
-        {
-            UiKeyManagement();
-        }
+        // ============================================================
+        // Key management entrypoint
+        // ============================================================
+        private void keyManagementToolStripMenuItem_Click(object sender, EventArgs e) => UiKeyManagement();
 
         private void UiKeyManagement()
         {
@@ -2157,6 +2196,59 @@ namespace HSTRYDoc
                 }
             }
         }
+
+        private void btnFontSizePls_Click(object sender, EventArgs e)
+        {
+            AdjustSelectionFontSize(+1f);
+        }
+
+        private void btnFontSizeMns_Click(object sender, EventArgs e)
+        {
+            AdjustSelectionFontSize(-1f);
+        }
+
+        private void AdjustSelectionFontSize(float delta)
+        {
+            var rtb = rtfMainText;
+            if (rtb == null) return;
+
+            int start = rtb.SelectionStart;
+            int len = rtb.SelectionLength;
+
+            // No selection -> change caret font size (like Word)
+            if (len == 0)
+            {
+                Font baseFont = rtb.SelectionFont ?? rtb.Font;
+                float newSize = Math.Clamp(baseFont.Size + delta, 1f, 200f);
+                rtb.SelectionFont = new Font(baseFont.FontFamily, newSize, baseFont.Style);
+                UpdateRtfUiFromSelection();
+                return;
+            }
+
+            // Mixed selection -> apply per character to preserve formatting
+            rtb.SuspendLayout();
+            try
+            {
+                for (int i = 0; i < len; i++)
+                {
+                    rtb.Select(start + i, 1);
+
+                    Font f = rtb.SelectionFont ?? rtb.Font;
+                    float newSize = Math.Clamp(f.Size + delta, 1f, 200f);
+
+                    rtb.SelectionFont = new Font(f.FontFamily, newSize, f.Style);
+                }
+
+                rtb.Select(start, len);
+                rtb.Focus();
+            }
+            finally
+            {
+                rtb.ResumeLayout();
+                UpdateRtfUiFromSelection();
+            }
+        }
+
     }
 
     public sealed record ContainerSearchHit(int BlockIndex, string BlockTitle, int IndexInText, string Snippet);

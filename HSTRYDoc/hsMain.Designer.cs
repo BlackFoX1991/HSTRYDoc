@@ -99,10 +99,10 @@
             toolsToolStripMenuItem = new ToolStripMenuItem();
             searchInBlockToolStripMenuItem = new ToolStripMenuItem();
             searchInContainerToolStripMenuItem = new ToolStripMenuItem();
+            keyManagementToolStripMenuItem = new ToolStripMenuItem();
             helpToolStripMenuItem = new ToolStripMenuItem();
             aboutToolStripMenuItem = new ToolStripMenuItem();
             InactiveIcon = new NotifyIcon(components);
-            keyManagementToolStripMenuItem = new ToolStripMenuItem();
             mainToolstrip.SuspendLayout();
             statusStrip1.SuspendLayout();
             ((System.ComponentModel.ISupportInitialize)splitContainer1).BeginInit();
@@ -432,6 +432,7 @@
             btnFontSizeMns.Name = "btnFontSizeMns";
             btnFontSizeMns.Size = new Size(23, 22);
             btnFontSizeMns.Text = "Font Size ( - )";
+            btnFontSizeMns.Click += btnFontSizeMns_Click;
             // 
             // btnFontSizePls
             // 
@@ -441,6 +442,7 @@
             btnFontSizePls.Name = "btnFontSizePls";
             btnFontSizePls.Size = new Size(23, 22);
             btnFontSizePls.Text = "Font Size (+)";
+            btnFontSizePls.Click += btnFontSizePls_Click;
             // 
             // dropDownHeader
             // 
@@ -645,6 +647,14 @@
             searchInContainerToolStripMenuItem.Size = new Size(186, 22);
             searchInContainerToolStripMenuItem.Text = "Search in Container...";
             // 
+            // keyManagementToolStripMenuItem
+            // 
+            keyManagementToolStripMenuItem.Image = (Image)resources.GetObject("keyManagementToolStripMenuItem.Image");
+            keyManagementToolStripMenuItem.Name = "keyManagementToolStripMenuItem";
+            keyManagementToolStripMenuItem.Size = new Size(186, 22);
+            keyManagementToolStripMenuItem.Text = "Key Management";
+            keyManagementToolStripMenuItem.Click += keyManagementToolStripMenuItem_Click;
+            // 
             // helpToolStripMenuItem
             // 
             helpToolStripMenuItem.DropDownItems.AddRange(new ToolStripItem[] { aboutToolStripMenuItem });
@@ -665,14 +675,6 @@
             InactiveIcon.Icon = (Icon)resources.GetObject("InactiveIcon.Icon");
             InactiveIcon.Text = "notifyIcon1";
             InactiveIcon.Visible = true;
-            // 
-            // keyManagementToolStripMenuItem
-            // 
-            keyManagementToolStripMenuItem.Image = (Image)resources.GetObject("keyManagementToolStripMenuItem.Image");
-            keyManagementToolStripMenuItem.Name = "keyManagementToolStripMenuItem";
-            keyManagementToolStripMenuItem.Size = new Size(186, 22);
-            keyManagementToolStripMenuItem.Text = "Key Management";
-            keyManagementToolStripMenuItem.Click += keyManagementToolStripMenuItem_Click;
             // 
             // hsMain
             // 
