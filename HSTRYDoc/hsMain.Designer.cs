@@ -49,6 +49,7 @@
             newBlockToolStripMenuItem = new ToolStripMenuItem();
             renameBlockToolStripMenuItem = new ToolStripMenuItem();
             removeBlockToolStripMenuItem = new ToolStripMenuItem();
+            panel1 = new Panel();
             rtfMainText = new RichTextBox();
             ctxRtf = new ContextMenuStrip(components);
             copyToolStripMenuItem1 = new ToolStripMenuItem();
@@ -80,6 +81,8 @@
             heading2ToolStripMenuItem = new ToolStripMenuItem();
             heading3ToolStripMenuItem = new ToolStripMenuItem();
             toolStripSeparator3 = new ToolStripSeparator();
+            toolStripButtonBullets = new ToolStripButton();
+            toolButtonBulletsNumeric = new ToolStripButton();
             foreColorToolButton = new ToolStripButton();
             backgroundColorToolButton = new ToolStripButton();
             toolTableInsert = new ToolStripButton();
@@ -87,9 +90,8 @@
             toolButtonCopy = new ToolStripButton();
             toolButtonPaste = new ToolStripButton();
             toolButtonCut = new ToolStripButton();
-            toolButtonSelectAll = new ToolStripButton();
             toolStripSeparator1 = new ToolStripSeparator();
-            toolStripButtonBullets = new ToolStripButton();
+            toolButtonSelectAll = new ToolStripButton();
             mainMenu = new MenuStrip();
             fileToolStripMenuItem = new ToolStripMenuItem();
             newToolStripMenuItem = new ToolStripMenuItem();
@@ -107,7 +109,6 @@
             helpToolStripMenuItem = new ToolStripMenuItem();
             aboutToolStripMenuItem = new ToolStripMenuItem();
             InactiveIcon = new NotifyIcon(components);
-            toolButtonBulletsNumeric = new ToolStripButton();
             mainToolstrip.SuspendLayout();
             statusStrip1.SuspendLayout();
             ((System.ComponentModel.ISupportInitialize)splitContainer1).BeginInit();
@@ -115,6 +116,7 @@
             splitContainer1.Panel2.SuspendLayout();
             splitContainer1.SuspendLayout();
             ctxBlocks.SuspendLayout();
+            panel1.SuspendLayout();
             ctxRtf.SuspendLayout();
             toolStripRtf.SuspendLayout();
             mainMenu.SuspendLayout();
@@ -199,7 +201,7 @@
             // 
             // splitContainer1.Panel2
             // 
-            splitContainer1.Panel2.Controls.Add(rtfMainText);
+            splitContainer1.Panel2.Controls.Add(panel1);
             splitContainer1.Panel2.Controls.Add(toolStripRtf);
             splitContainer1.Panel2.Enabled = false;
             splitContainer1.Size = new Size(1022, 589);
@@ -270,14 +272,26 @@
             removeBlockToolStripMenuItem.Size = new Size(158, 22);
             removeBlockToolStripMenuItem.Text = "Remove Block";
             // 
+            // panel1
+            // 
+            panel1.BackColor = Color.SlateGray;
+            panel1.BorderStyle = BorderStyle.FixedSingle;
+            panel1.Controls.Add(rtfMainText);
+            panel1.Dock = DockStyle.Fill;
+            panel1.Location = new Point(0, 25);
+            panel1.Name = "panel1";
+            panel1.Padding = new Padding(8, 20, 8, 20);
+            panel1.Size = new Size(614, 564);
+            panel1.TabIndex = 2;
+            // 
             // rtfMainText
             // 
             rtfMainText.BorderStyle = BorderStyle.None;
             rtfMainText.ContextMenuStrip = ctxRtf;
             rtfMainText.Dock = DockStyle.Fill;
-            rtfMainText.Location = new Point(0, 25);
+            rtfMainText.Location = new Point(8, 20);
             rtfMainText.Name = "rtfMainText";
-            rtfMainText.Size = new Size(614, 564);
+            rtfMainText.Size = new Size(596, 522);
             rtfMainText.TabIndex = 0;
             rtfMainText.Text = "";
             // 
@@ -519,6 +533,26 @@
             toolStripSeparator3.Name = "toolStripSeparator3";
             toolStripSeparator3.Size = new Size(6, 25);
             // 
+            // toolStripButtonBullets
+            // 
+            toolStripButtonBullets.DisplayStyle = ToolStripItemDisplayStyle.Image;
+            toolStripButtonBullets.Image = (Image)resources.GetObject("toolStripButtonBullets.Image");
+            toolStripButtonBullets.ImageTransparentColor = Color.Magenta;
+            toolStripButtonBullets.Name = "toolStripButtonBullets";
+            toolStripButtonBullets.Size = new Size(23, 22);
+            toolStripButtonBullets.Text = "Insert Bulletpoints";
+            toolStripButtonBullets.Click += toolStripButtonBullets_Click;
+            // 
+            // toolButtonBulletsNumeric
+            // 
+            toolButtonBulletsNumeric.DisplayStyle = ToolStripItemDisplayStyle.Image;
+            toolButtonBulletsNumeric.Image = (Image)resources.GetObject("toolButtonBulletsNumeric.Image");
+            toolButtonBulletsNumeric.ImageTransparentColor = Color.Magenta;
+            toolButtonBulletsNumeric.Name = "toolButtonBulletsNumeric";
+            toolButtonBulletsNumeric.Size = new Size(23, 22);
+            toolButtonBulletsNumeric.Text = "Insert Numeric Bulletpoints";
+            toolButtonBulletsNumeric.Click += toolButtonBulletsNumeric_Click;
+            // 
             // foreColorToolButton
             // 
             foreColorToolButton.DisplayStyle = ToolStripItemDisplayStyle.Image;
@@ -579,6 +613,11 @@
             toolButtonCut.Size = new Size(23, 22);
             toolButtonCut.Text = "Cut";
             // 
+            // toolStripSeparator1
+            // 
+            toolStripSeparator1.Name = "toolStripSeparator1";
+            toolStripSeparator1.Size = new Size(6, 25);
+            // 
             // toolButtonSelectAll
             // 
             toolButtonSelectAll.DisplayStyle = ToolStripItemDisplayStyle.Image;
@@ -587,21 +626,6 @@
             toolButtonSelectAll.Name = "toolButtonSelectAll";
             toolButtonSelectAll.Size = new Size(23, 22);
             toolButtonSelectAll.Text = "Select All";
-            // 
-            // toolStripSeparator1
-            // 
-            toolStripSeparator1.Name = "toolStripSeparator1";
-            toolStripSeparator1.Size = new Size(6, 25);
-            // 
-            // toolStripButtonBullets
-            // 
-            toolStripButtonBullets.DisplayStyle = ToolStripItemDisplayStyle.Image;
-            toolStripButtonBullets.Image = (Image)resources.GetObject("toolStripButtonBullets.Image");
-            toolStripButtonBullets.ImageTransparentColor = Color.Magenta;
-            toolStripButtonBullets.Name = "toolStripButtonBullets";
-            toolStripButtonBullets.Size = new Size(23, 22);
-            toolStripButtonBullets.Text = "Insert Bulletpoints";
-            toolStripButtonBullets.Click += toolStripButtonBullets_Click;
             // 
             // mainMenu
             // 
@@ -722,16 +746,6 @@
             InactiveIcon.Text = "notifyIcon1";
             InactiveIcon.Visible = true;
             // 
-            // toolButtonBulletsNumeric
-            // 
-            toolButtonBulletsNumeric.DisplayStyle = ToolStripItemDisplayStyle.Image;
-            toolButtonBulletsNumeric.Image = (Image)resources.GetObject("toolButtonBulletsNumeric.Image");
-            toolButtonBulletsNumeric.ImageTransparentColor = Color.Magenta;
-            toolButtonBulletsNumeric.Name = "toolButtonBulletsNumeric";
-            toolButtonBulletsNumeric.Size = new Size(23, 22);
-            toolButtonBulletsNumeric.Text = "Insert Numeric Bulletpoints";
-            toolButtonBulletsNumeric.Click += toolButtonBulletsNumeric_Click;
-            // 
             // hsMain
             // 
             AutoScaleDimensions = new SizeF(7F, 15F);
@@ -756,6 +770,7 @@
             ((System.ComponentModel.ISupportInitialize)splitContainer1).EndInit();
             splitContainer1.ResumeLayout(false);
             ctxBlocks.ResumeLayout(false);
+            panel1.ResumeLayout(false);
             ctxRtf.ResumeLayout(false);
             toolStripRtf.ResumeLayout(false);
             toolStripRtf.PerformLayout();
@@ -844,5 +859,6 @@
         private ToolStripButton toolButtonAlignRight;
         private ToolStripButton toolStripButtonBullets;
         private ToolStripButton toolButtonBulletsNumeric;
+        private Panel panel1;
     }
 }

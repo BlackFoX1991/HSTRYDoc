@@ -2383,10 +2383,6 @@ namespace HSTRYDoc
             }
         }
 
-        // ============================================================
-        // RichEdit numbering interop (WinForms RichTextBox)
-        // ============================================================
-
 
         private void ApplyDecimalNumbering(bool enable, ushort startAt = 1)
         {
