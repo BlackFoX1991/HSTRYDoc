@@ -30,9 +30,9 @@
         {
             System.ComponentModel.ComponentResourceManager resources = new System.ComponentModel.ComponentResourceManager(typeof(aboutDiag));
             panel1 = new Panel();
+            button1 = new Button();
             linkLabel1 = new LinkLabel();
             label1 = new Label();
-            button1 = new Button();
             panel1.SuspendLayout();
             SuspendLayout();
             // 
@@ -48,15 +48,27 @@
             panel1.Dock = DockStyle.Fill;
             panel1.Location = new Point(0, 0);
             panel1.Name = "panel1";
-            panel1.Size = new Size(642, 270);
+            panel1.Size = new Size(770, 270);
             panel1.TabIndex = 0;
+            // 
+            // button1
+            // 
+            button1.BackColor = Color.Maroon;
+            button1.FlatStyle = FlatStyle.Flat;
+            button1.Location = new Point(739, 3);
+            button1.Name = "button1";
+            button1.Size = new Size(26, 24);
+            button1.TabIndex = 2;
+            button1.Text = "X";
+            button1.UseVisualStyleBackColor = false;
+            button1.Click += button1_Click;
             // 
             // linkLabel1
             // 
             linkLabel1.ActiveLinkColor = Color.FromArgb(128, 64, 0);
             linkLabel1.AutoSize = true;
             linkLabel1.LinkColor = Color.FromArgb(192, 192, 255);
-            linkLabel1.Location = new Point(382, 224);
+            linkLabel1.Location = new Point(45, 224);
             linkLabel1.Name = "linkLabel1";
             linkLabel1.Size = new Size(186, 15);
             linkLabel1.TabIndex = 1;
@@ -68,29 +80,17 @@
             // 
             label1.BorderStyle = BorderStyle.FixedSingle;
             label1.ForeColor = Color.White;
-            label1.Location = new Point(232, 178);
+            label1.Location = new Point(282, 172);
             label1.Name = "label1";
-            label1.Size = new Size(340, 76);
+            label1.Size = new Size(403, 76);
             label1.TabIndex = 0;
-            label1.Text = "HstryDocu is a secure text container that stores and organizes your notes, protecting them with BitChain-style encryption for confidentiality and integrity.\r\n© 2026 Artur Loewen\r\n";
-            // 
-            // button1
-            // 
-            button1.BackColor = Color.Maroon;
-            button1.FlatStyle = FlatStyle.Flat;
-            button1.Location = new Point(603, 11);
-            button1.Name = "button1";
-            button1.Size = new Size(26, 24);
-            button1.TabIndex = 2;
-            button1.Text = "X";
-            button1.UseVisualStyleBackColor = false;
-            button1.Click += button1_Click;
+            label1.Text = resources.GetString("label1.Text");
             // 
             // aboutDiag
             // 
             AutoScaleDimensions = new SizeF(7F, 15F);
             AutoScaleMode = AutoScaleMode.Font;
-            ClientSize = new Size(642, 270);
+            ClientSize = new Size(770, 270);
             Controls.Add(panel1);
             FormBorderStyle = FormBorderStyle.None;
             Icon = (Icon)resources.GetObject("$this.Icon");

@@ -3112,6 +3112,9 @@
         ZUJXLu4AAAAASUVORK5CYII=
 </value>
   </data>
+  <data name="label1.Text" xml:space="preserve">
+    <value>HstryDocu is a secure, block-based document editor that stores rich text content in an encrypted, tamper-evident container. Documents are split into blocks, protected with strong cryptography, and can be safely shared with selected recipients using public-key access control.</value>
+  </data>
   <data name="$this.Icon" type="System.Drawing.Icon, System.Drawing" mimetype="application/x-microsoft.net.object.bytearray.base64">
     <value>
         AAABAAEAEBAAAAAAIAAYAwAAFgAAAIlQTkcNChoKAAAADUlIRFIAAAAQAAAAEAgGAAAAH/P/YQAAAt9J

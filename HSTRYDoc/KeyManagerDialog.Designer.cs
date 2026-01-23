@@ -46,252 +46,270 @@ namespace HSTRYDoc
 
         private void InitializeComponent()
         {
-            this.grpMyKeys = new System.Windows.Forms.GroupBox();
-            this.lblPrivPath = new System.Windows.Forms.Label();
-            this.txtPrivateKeyPath = new System.Windows.Forms.TextBox();
-            this.btnBrowsePriv = new System.Windows.Forms.Button();
-            this.btnCreateKeyPair = new System.Windows.Forms.Button();
-            this.btnExportPublic = new System.Windows.Forms.Button();
-            this.btnTransferOwnership = new System.Windows.Forms.Button();
-            this.lblMyKeyIdCaption = new System.Windows.Forms.Label();
-            this.txtMyKeyId = new System.Windows.Forms.TextBox();
-
-            this.lblMyRecipientStatusCaption = new System.Windows.Forms.Label();
-            this.lblMyRecipientStatus = new System.Windows.Forms.Label();
-            this.btnAddMyself = new System.Windows.Forms.Button();
-
-            this.grpRecipients = new System.Windows.Forms.GroupBox();
-            this.lvwRecipients = new System.Windows.Forms.ListView();
-            this.colKeyId = new System.Windows.Forms.ColumnHeader();
-            this.colAlg = new System.Windows.Forms.ColumnHeader();
-            this.colWrappedLen = new System.Windows.Forms.ColumnHeader();
-            this.btnAddRecipient = new System.Windows.Forms.Button();
-            this.btnRemoveRecipient = new System.Windows.Forms.Button();
-            this.btnCopyKeyId = new System.Windows.Forms.Button();
-            this.lblDropHint = new System.Windows.Forms.Label();
-
-            this.btnOk = new System.Windows.Forms.Button();
-            this.btnCancel = new System.Windows.Forms.Button();
-
-            this.grpMyKeys.SuspendLayout();
-            this.grpRecipients.SuspendLayout();
-            this.SuspendLayout();
-
+            System.ComponentModel.ComponentResourceManager resources = new System.ComponentModel.ComponentResourceManager(typeof(KeyManagerDialog));
+            grpMyKeys = new GroupBox();
+            lblPrivPath = new Label();
+            txtPrivateKeyPath = new TextBox();
+            btnBrowsePriv = new Button();
+            btnCreateKeyPair = new Button();
+            btnExportPublic = new Button();
+            btnTransferOwnership = new Button();
+            lblMyKeyIdCaption = new Label();
+            txtMyKeyId = new TextBox();
+            lblMyRecipientStatusCaption = new Label();
+            lblMyRecipientStatus = new Label();
+            btnAddMyself = new Button();
+            grpRecipients = new GroupBox();
+            lvwRecipients = new ListView();
+            colKeyId = new ColumnHeader();
+            colAlg = new ColumnHeader();
+            colWrappedLen = new ColumnHeader();
+            btnAddRecipient = new Button();
+            btnRemoveRecipient = new Button();
+            btnCopyKeyId = new Button();
+            lblDropHint = new Label();
+            btnOk = new Button();
+            btnCancel = new Button();
+            grpMyKeys.SuspendLayout();
+            grpRecipients.SuspendLayout();
+            SuspendLayout();
+            // 
             // grpMyKeys
-            this.grpMyKeys.Controls.Add(this.lblPrivPath);
-            this.grpMyKeys.Controls.Add(this.txtPrivateKeyPath);
-            this.grpMyKeys.Controls.Add(this.btnBrowsePriv);
-            this.grpMyKeys.Controls.Add(this.btnCreateKeyPair);
-            this.grpMyKeys.Controls.Add(this.btnExportPublic);
-            this.grpMyKeys.Controls.Add(this.btnTransferOwnership);
-            this.grpMyKeys.Controls.Add(this.lblMyKeyIdCaption);
-            this.grpMyKeys.Controls.Add(this.txtMyKeyId);
-            this.grpMyKeys.Controls.Add(this.lblMyRecipientStatusCaption);
-            this.grpMyKeys.Controls.Add(this.lblMyRecipientStatus);
-            this.grpMyKeys.Controls.Add(this.btnAddMyself);
-            this.grpMyKeys.Location = new System.Drawing.Point(12, 12);
-            this.grpMyKeys.Name = "grpMyKeys";
-            this.grpMyKeys.Size = new System.Drawing.Size(760, 178);
-            this.grpMyKeys.TabIndex = 0;
-            this.grpMyKeys.TabStop = false;
-            this.grpMyKeys.Text = "My keys";
-
+            // 
+            grpMyKeys.Controls.Add(lblPrivPath);
+            grpMyKeys.Controls.Add(txtPrivateKeyPath);
+            grpMyKeys.Controls.Add(btnBrowsePriv);
+            grpMyKeys.Controls.Add(btnCreateKeyPair);
+            grpMyKeys.Controls.Add(btnExportPublic);
+            grpMyKeys.Controls.Add(btnTransferOwnership);
+            grpMyKeys.Controls.Add(lblMyKeyIdCaption);
+            grpMyKeys.Controls.Add(txtMyKeyId);
+            grpMyKeys.Controls.Add(lblMyRecipientStatusCaption);
+            grpMyKeys.Controls.Add(lblMyRecipientStatus);
+            grpMyKeys.Controls.Add(btnAddMyself);
+            grpMyKeys.Location = new Point(12, 12);
+            grpMyKeys.Name = "grpMyKeys";
+            grpMyKeys.Size = new Size(760, 178);
+            grpMyKeys.TabIndex = 0;
+            grpMyKeys.TabStop = false;
+            grpMyKeys.Text = "My keys";
+            // 
             // lblPrivPath
-            this.lblPrivPath.AutoSize = true;
-            this.lblPrivPath.Location = new System.Drawing.Point(16, 28);
-            this.lblPrivPath.Name = "lblPrivPath";
-            this.lblPrivPath.Size = new System.Drawing.Size(92, 15);
-            this.lblPrivPath.TabIndex = 0;
-            this.lblPrivPath.Text = "Private key file:";
-
+            // 
+            lblPrivPath.AutoSize = true;
+            lblPrivPath.Location = new Point(16, 28);
+            lblPrivPath.Name = "lblPrivPath";
+            lblPrivPath.Size = new Size(86, 15);
+            lblPrivPath.TabIndex = 0;
+            lblPrivPath.Text = "Private key file:";
+            // 
             // txtPrivateKeyPath
-            this.txtPrivateKeyPath.Location = new System.Drawing.Point(114, 25);
-            this.txtPrivateKeyPath.Name = "txtPrivateKeyPath";
-            this.txtPrivateKeyPath.ReadOnly = true;
-            this.txtPrivateKeyPath.Size = new System.Drawing.Size(522, 23);
-            this.txtPrivateKeyPath.TabIndex = 1;
-
+            // 
+            txtPrivateKeyPath.Location = new Point(114, 25);
+            txtPrivateKeyPath.Name = "txtPrivateKeyPath";
+            txtPrivateKeyPath.ReadOnly = true;
+            txtPrivateKeyPath.Size = new Size(522, 23);
+            txtPrivateKeyPath.TabIndex = 1;
+            // 
             // btnBrowsePriv
-            this.btnBrowsePriv.Location = new System.Drawing.Point(642, 24);
-            this.btnBrowsePriv.Name = "btnBrowsePriv";
-            this.btnBrowsePriv.Size = new System.Drawing.Size(100, 25);
-            this.btnBrowsePriv.TabIndex = 2;
-            this.btnBrowsePriv.Text = "Browse...";
-            this.btnBrowsePriv.UseVisualStyleBackColor = true;
-
+            // 
+            btnBrowsePriv.Location = new Point(642, 24);
+            btnBrowsePriv.Name = "btnBrowsePriv";
+            btnBrowsePriv.Size = new Size(100, 25);
+            btnBrowsePriv.TabIndex = 2;
+            btnBrowsePriv.Text = "Browse...";
+            btnBrowsePriv.UseVisualStyleBackColor = true;
+            // 
             // btnCreateKeyPair
-            this.btnCreateKeyPair.Location = new System.Drawing.Point(114, 54);
-            this.btnCreateKeyPair.Name = "btnCreateKeyPair";
-            this.btnCreateKeyPair.Size = new System.Drawing.Size(180, 27);
-            this.btnCreateKeyPair.TabIndex = 3;
-            this.btnCreateKeyPair.Text = "Create key pair...";
-            this.btnCreateKeyPair.UseVisualStyleBackColor = true;
-
+            // 
+            btnCreateKeyPair.Location = new Point(114, 54);
+            btnCreateKeyPair.Name = "btnCreateKeyPair";
+            btnCreateKeyPair.Size = new Size(180, 27);
+            btnCreateKeyPair.TabIndex = 3;
+            btnCreateKeyPair.Text = "Create key pair...";
+            btnCreateKeyPair.UseVisualStyleBackColor = true;
+            // 
             // btnExportPublic
-            this.btnExportPublic.Location = new System.Drawing.Point(300, 54);
-            this.btnExportPublic.Name = "btnExportPublic";
-            this.btnExportPublic.Size = new System.Drawing.Size(170, 27);
-            this.btnExportPublic.TabIndex = 4;
-            this.btnExportPublic.Text = "Export public key...";
-            this.btnExportPublic.UseVisualStyleBackColor = true;
-
+            // 
+            btnExportPublic.Location = new Point(300, 54);
+            btnExportPublic.Name = "btnExportPublic";
+            btnExportPublic.Size = new Size(170, 27);
+            btnExportPublic.TabIndex = 4;
+            btnExportPublic.Text = "Export public key...";
+            btnExportPublic.UseVisualStyleBackColor = true;
+            // 
             // btnTransferOwnership
-            this.btnTransferOwnership.Location = new System.Drawing.Point(476, 54);
-            this.btnTransferOwnership.Name = "btnTransferOwnership";
-            this.btnTransferOwnership.Size = new System.Drawing.Size(170, 27);
-            this.btnTransferOwnership.TabIndex = 5;
-            this.btnTransferOwnership.Text = "Transfer ownership...";
-            this.btnTransferOwnership.UseVisualStyleBackColor = true;
-
+            // 
+            btnTransferOwnership.Location = new Point(476, 54);
+            btnTransferOwnership.Name = "btnTransferOwnership";
+            btnTransferOwnership.Size = new Size(170, 27);
+            btnTransferOwnership.TabIndex = 5;
+            btnTransferOwnership.Text = "Transfer ownership...";
+            btnTransferOwnership.UseVisualStyleBackColor = true;
+            // 
             // lblMyKeyIdCaption
-            this.lblMyKeyIdCaption.AutoSize = true;
-            this.lblMyKeyIdCaption.Location = new System.Drawing.Point(16, 97);
-            this.lblMyKeyIdCaption.Name = "lblMyKeyIdCaption";
-            this.lblMyKeyIdCaption.Size = new System.Drawing.Size(46, 15);
-            this.lblMyKeyIdCaption.TabIndex = 6;
-            this.lblMyKeyIdCaption.Text = "Key ID:";
-
+            // 
+            lblMyKeyIdCaption.AutoSize = true;
+            lblMyKeyIdCaption.Location = new Point(16, 97);
+            lblMyKeyIdCaption.Name = "lblMyKeyIdCaption";
+            lblMyKeyIdCaption.Size = new Size(43, 15);
+            lblMyKeyIdCaption.TabIndex = 6;
+            lblMyKeyIdCaption.Text = "Key ID:";
+            // 
             // txtMyKeyId
-            this.txtMyKeyId.Location = new System.Drawing.Point(114, 94);
-            this.txtMyKeyId.Name = "txtMyKeyId";
-            this.txtMyKeyId.ReadOnly = true;
-            this.txtMyKeyId.Size = new System.Drawing.Size(628, 23);
-            this.txtMyKeyId.TabIndex = 7;
-
+            // 
+            txtMyKeyId.Location = new Point(114, 94);
+            txtMyKeyId.Name = "txtMyKeyId";
+            txtMyKeyId.ReadOnly = true;
+            txtMyKeyId.Size = new Size(628, 23);
+            txtMyKeyId.TabIndex = 7;
+            // 
             // lblMyRecipientStatusCaption
-            this.lblMyRecipientStatusCaption.AutoSize = true;
-            this.lblMyRecipientStatusCaption.Location = new System.Drawing.Point(16, 128);
-            this.lblMyRecipientStatusCaption.Name = "lblMyRecipientStatusCaption";
-            this.lblMyRecipientStatusCaption.Size = new System.Drawing.Size(48, 15);
-            this.lblMyRecipientStatusCaption.TabIndex = 8;
-            this.lblMyRecipientStatusCaption.Text = "Status:";
-
+            // 
+            lblMyRecipientStatusCaption.AutoSize = true;
+            lblMyRecipientStatusCaption.Location = new Point(16, 128);
+            lblMyRecipientStatusCaption.Name = "lblMyRecipientStatusCaption";
+            lblMyRecipientStatusCaption.Size = new Size(42, 15);
+            lblMyRecipientStatusCaption.TabIndex = 8;
+            lblMyRecipientStatusCaption.Text = "Status:";
+            // 
             // lblMyRecipientStatus
-            this.lblMyRecipientStatus.AutoSize = true;
-            this.lblMyRecipientStatus.Location = new System.Drawing.Point(114, 128);
-            this.lblMyRecipientStatus.Name = "lblMyRecipientStatus";
-            this.lblMyRecipientStatus.Size = new System.Drawing.Size(108, 15);
-            this.lblMyRecipientStatus.TabIndex = 9;
-            this.lblMyRecipientStatus.Text = "No private key loaded";
-
+            // 
+            lblMyRecipientStatus.AutoSize = true;
+            lblMyRecipientStatus.Location = new Point(114, 128);
+            lblMyRecipientStatus.Name = "lblMyRecipientStatus";
+            lblMyRecipientStatus.Size = new Size(122, 15);
+            lblMyRecipientStatus.TabIndex = 9;
+            lblMyRecipientStatus.Text = "No private key loaded";
+            // 
             // btnAddMyself
-            this.btnAddMyself.Location = new System.Drawing.Point(642, 123);
-            this.btnAddMyself.Name = "btnAddMyself";
-            this.btnAddMyself.Size = new System.Drawing.Size(100, 27);
-            this.btnAddMyself.TabIndex = 10;
-            this.btnAddMyself.Text = "Add myself";
-            this.btnAddMyself.UseVisualStyleBackColor = true;
-
+            // 
+            btnAddMyself.Location = new Point(642, 123);
+            btnAddMyself.Name = "btnAddMyself";
+            btnAddMyself.Size = new Size(100, 27);
+            btnAddMyself.TabIndex = 10;
+            btnAddMyself.Text = "Add myself";
+            btnAddMyself.UseVisualStyleBackColor = true;
+            // 
             // grpRecipients
-            this.grpRecipients.Controls.Add(this.lvwRecipients);
-            this.grpRecipients.Controls.Add(this.btnAddRecipient);
-            this.grpRecipients.Controls.Add(this.btnRemoveRecipient);
-            this.grpRecipients.Controls.Add(this.btnCopyKeyId);
-            this.grpRecipients.Controls.Add(this.lblDropHint);
-            this.grpRecipients.Location = new System.Drawing.Point(12, 196);
-            this.grpRecipients.Name = "grpRecipients";
-            this.grpRecipients.Size = new System.Drawing.Size(760, 330);
-            this.grpRecipients.TabIndex = 1;
-            this.grpRecipients.TabStop = false;
-            this.grpRecipients.Text = "Recipients";
-
+            // 
+            grpRecipients.Controls.Add(lvwRecipients);
+            grpRecipients.Controls.Add(btnAddRecipient);
+            grpRecipients.Controls.Add(btnRemoveRecipient);
+            grpRecipients.Controls.Add(btnCopyKeyId);
+            grpRecipients.Controls.Add(lblDropHint);
+            grpRecipients.Location = new Point(12, 196);
+            grpRecipients.Name = "grpRecipients";
+            grpRecipients.Size = new Size(760, 330);
+            grpRecipients.TabIndex = 1;
+            grpRecipients.TabStop = false;
+            grpRecipients.Text = "Recipients";
+            // 
             // lvwRecipients
-            this.lvwRecipients.Columns.AddRange(new System.Windows.Forms.ColumnHeader[] {
-            this.colKeyId,
-            this.colAlg,
-            this.colWrappedLen});
-            this.lvwRecipients.FullRowSelect = true;
-            this.lvwRecipients.GridLines = true;
-            this.lvwRecipients.HideSelection = false;
-            this.lvwRecipients.Location = new System.Drawing.Point(16, 24);
-            this.lvwRecipients.MultiSelect = false;
-            this.lvwRecipients.Name = "lvwRecipients";
-            this.lvwRecipients.Size = new System.Drawing.Size(726, 245);
-            this.lvwRecipients.TabIndex = 0;
-            this.lvwRecipients.UseCompatibleStateImageBehavior = false;
-            this.lvwRecipients.View = System.Windows.Forms.View.Details;
-
+            // 
+            lvwRecipients.Columns.AddRange(new ColumnHeader[] { colKeyId, colAlg, colWrappedLen });
+            lvwRecipients.FullRowSelect = true;
+            lvwRecipients.GridLines = true;
+            lvwRecipients.Location = new Point(16, 24);
+            lvwRecipients.MultiSelect = false;
+            lvwRecipients.Name = "lvwRecipients";
+            lvwRecipients.Size = new Size(726, 245);
+            lvwRecipients.TabIndex = 0;
+            lvwRecipients.UseCompatibleStateImageBehavior = false;
+            lvwRecipients.View = View.Details;
+            // 
             // colKeyId
-            this.colKeyId.Text = "Key ID (SHA-256)";
-            this.colKeyId.Width = 520;
-
+            // 
+            colKeyId.Text = "Key ID (SHA-256)";
+            colKeyId.Width = 520;
+            // 
             // colAlg
-            this.colAlg.Text = "Algorithm";
-            this.colAlg.Width = 120;
-
+            // 
+            colAlg.Text = "Algorithm";
+            colAlg.Width = 120;
+            // 
             // colWrappedLen
-            this.colWrappedLen.Text = "Wrapped DEK (bytes)";
-            this.colWrappedLen.Width = 140;
-
+            // 
+            colWrappedLen.Text = "Wrapped DEK (bytes)";
+            colWrappedLen.Width = 140;
+            // 
             // btnAddRecipient
-            this.btnAddRecipient.Location = new System.Drawing.Point(16, 290);
-            this.btnAddRecipient.Name = "btnAddRecipient";
-            this.btnAddRecipient.Size = new System.Drawing.Size(140, 27);
-            this.btnAddRecipient.TabIndex = 1;
-            this.btnAddRecipient.Text = "Add recipient...";
-            this.btnAddRecipient.UseVisualStyleBackColor = true;
-
+            // 
+            btnAddRecipient.Location = new Point(16, 290);
+            btnAddRecipient.Name = "btnAddRecipient";
+            btnAddRecipient.Size = new Size(140, 27);
+            btnAddRecipient.TabIndex = 1;
+            btnAddRecipient.Text = "Add recipient...";
+            btnAddRecipient.UseVisualStyleBackColor = true;
+            // 
             // btnRemoveRecipient
-            this.btnRemoveRecipient.Location = new System.Drawing.Point(162, 290);
-            this.btnRemoveRecipient.Name = "btnRemoveRecipient";
-            this.btnRemoveRecipient.Size = new System.Drawing.Size(140, 27);
-            this.btnRemoveRecipient.TabIndex = 2;
-            this.btnRemoveRecipient.Text = "Remove selected";
-            this.btnRemoveRecipient.UseVisualStyleBackColor = true;
-
+            // 
+            btnRemoveRecipient.Location = new Point(162, 290);
+            btnRemoveRecipient.Name = "btnRemoveRecipient";
+            btnRemoveRecipient.Size = new Size(140, 27);
+            btnRemoveRecipient.TabIndex = 2;
+            btnRemoveRecipient.Text = "Remove selected";
+            btnRemoveRecipient.UseVisualStyleBackColor = true;
+            // 
             // btnCopyKeyId
-            this.btnCopyKeyId.Location = new System.Drawing.Point(308, 290);
-            this.btnCopyKeyId.Name = "btnCopyKeyId";
-            this.btnCopyKeyId.Size = new System.Drawing.Size(140, 27);
-            this.btnCopyKeyId.TabIndex = 3;
-            this.btnCopyKeyId.Text = "Copy Key ID";
-            this.btnCopyKeyId.UseVisualStyleBackColor = true;
-
+            // 
+            btnCopyKeyId.Location = new Point(308, 290);
+            btnCopyKeyId.Name = "btnCopyKeyId";
+            btnCopyKeyId.Size = new Size(140, 27);
+            btnCopyKeyId.TabIndex = 3;
+            btnCopyKeyId.Text = "Copy Key ID";
+            btnCopyKeyId.UseVisualStyleBackColor = true;
+            // 
             // lblDropHint
-            this.lblDropHint.AutoSize = true;
-            this.lblDropHint.Location = new System.Drawing.Point(458, 296);
-            this.lblDropHint.Name = "lblDropHint";
-            this.lblDropHint.Size = new System.Drawing.Size(284, 15);
-            this.lblDropHint.TabIndex = 4;
-            this.lblDropHint.Text = "Tip: Drag and drop .hstrypub files onto the list.";
-
+            // 
+            lblDropHint.AutoSize = true;
+            lblDropHint.Location = new Point(458, 296);
+            lblDropHint.Name = "lblDropHint";
+            lblDropHint.Size = new Size(252, 15);
+            lblDropHint.TabIndex = 4;
+            lblDropHint.Text = "Tip: Drag and drop .hstrypub files onto the list.";
+            // 
             // btnOk
-            this.btnOk.Location = new System.Drawing.Point(616, 536);
-            this.btnOk.Name = "btnOk";
-            this.btnOk.Size = new System.Drawing.Size(75, 28);
-            this.btnOk.TabIndex = 2;
-            this.btnOk.Text = "OK";
-            this.btnOk.UseVisualStyleBackColor = true;
-
+            // 
+            btnOk.Location = new Point(616, 536);
+            btnOk.Name = "btnOk";
+            btnOk.Size = new Size(75, 28);
+            btnOk.TabIndex = 2;
+            btnOk.Text = "OK";
+            btnOk.UseVisualStyleBackColor = true;
+            // 
             // btnCancel
-            this.btnCancel.Location = new System.Drawing.Point(697, 536);
-            this.btnCancel.Name = "btnCancel";
-            this.btnCancel.Size = new System.Drawing.Size(75, 28);
-            this.btnCancel.TabIndex = 3;
-            this.btnCancel.Text = "Cancel";
-            this.btnCancel.UseVisualStyleBackColor = true;
-
+            // 
+            btnCancel.Location = new Point(697, 536);
+            btnCancel.Name = "btnCancel";
+            btnCancel.Size = new Size(75, 28);
+            btnCancel.TabIndex = 3;
+            btnCancel.Text = "Cancel";
+            btnCancel.UseVisualStyleBackColor = true;
+            // 
             // KeyManagerDialog
-            this.AcceptButton = this.btnOk;
-            this.CancelButton = this.btnCancel;
-            this.AutoScaleMode = System.Windows.Forms.AutoScaleMode.Font;
-            this.ClientSize = new System.Drawing.Size(784, 576);
-            this.Controls.Add(this.btnCancel);
-            this.Controls.Add(this.btnOk);
-            this.Controls.Add(this.grpRecipients);
-            this.Controls.Add(this.grpMyKeys);
-            this.FormBorderStyle = System.Windows.Forms.FormBorderStyle.FixedDialog;
-            this.MaximizeBox = false;
-            this.MinimizeBox = false;
-            this.Name = "KeyManagerDialog";
-            this.StartPosition = System.Windows.Forms.FormStartPosition.CenterParent;
-            this.Text = "Key Management";
-
-            this.grpMyKeys.ResumeLayout(false);
-            this.grpMyKeys.PerformLayout();
-            this.grpRecipients.ResumeLayout(false);
-            this.grpRecipients.PerformLayout();
-            this.ResumeLayout(false);
+            // 
+            AcceptButton = btnOk;
+            AutoScaleDimensions = new SizeF(7F, 15F);
+            AutoScaleMode = AutoScaleMode.Font;
+            CancelButton = btnCancel;
+            ClientSize = new Size(784, 576);
+            Controls.Add(btnCancel);
+            Controls.Add(btnOk);
+            Controls.Add(grpRecipients);
+            Controls.Add(grpMyKeys);
+            FormBorderStyle = FormBorderStyle.FixedDialog;
+            Icon = (Icon)resources.GetObject("$this.Icon");
+            MaximizeBox = false;
+            MinimizeBox = false;
+            Name = "KeyManagerDialog";
+            StartPosition = FormStartPosition.CenterParent;
+            Text = "Key Management";
+            grpMyKeys.ResumeLayout(false);
+            grpMyKeys.PerformLayout();
+            grpRecipients.ResumeLayout(false);
+            grpRecipients.PerformLayout();
+            ResumeLayout(false);
         }
     }
 }
