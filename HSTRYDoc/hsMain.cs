@@ -18,6 +18,7 @@ using System.Collections.Generic;
 using System.Drawing;
 using System.Text;
 using System.Windows.Forms;
+using System.Runtime.InteropServices;
 
 namespace HSTRYDoc
 {
@@ -26,8 +27,8 @@ namespace HSTRYDoc
         private HSTRYDoc.colorPicker? _colorPopup;
         private bool _suppressBlockSelectionChanged = false;
 
-
         private bool _updatingFontSizeUi = false;
+        private bool _updatingParagraphUi = false;
 
         private readonly AppState _appState = AppState.Load();
 
@@ -352,6 +353,7 @@ namespace HSTRYDoc
 
                 if (x < wa.Left) x = wa.Left;
                 if (y < wa.Top) y = wa.Top;
+
                 if (x + w > wa.Right) x = wa.Right - w;
                 if (y + h > wa.Bottom) y = wa.Bottom - h;
 
@@ -561,8 +563,6 @@ namespace HSTRYDoc
             italicToolStripMenuItem.Click += (_, __) => ToggleSelectionStyle(FontStyle.Italic);
             underlineToolStripMenuItem.Click += (_, __) => ToggleSelectionStyle(FontStyle.Underline);
             strikeToolStripMenuItem.Click += (_, __) => ToggleSelectionStyle(FontStyle.Strikeout);
-
-
 
             // Context menu colors
             forecolorToolStripMenuItem.Click += (_, __) => foreColorToolButton_Click(foreColorToolButton, EventArgs.Empty);
@@ -1378,6 +1378,8 @@ namespace HSTRYDoc
 
         private void UpdateRtfUiFromSelection()
         {
+            if (_updatingParagraphUi) return;
+
             Font f = rtfMainText.SelectionFont ?? rtfMainText.Font;
 
             boldToolButton.Checked = f.Bold;
@@ -1394,8 +1396,30 @@ namespace HSTRYDoc
             {
                 _updatingFontSizeUi = false;
             }
-        }
 
+            // Paragraph UI (alignment + bullets + numbering)
+            _updatingParagraphUi = true;
+            try
+            {
+                HorizontalAlignment al = rtfMainText.SelectionAlignment;
+
+                if (toolButtonAlignLeft != null) toolButtonAlignLeft.Checked = (al == HorizontalAlignment.Left);
+                if (toolButtonAlignCenter != null) toolButtonAlignCenter.Checked = (al == HorizontalAlignment.Center);
+                if (toolButtonAlignRight != null) toolButtonAlignRight.Checked = (al == HorizontalAlignment.Right);
+
+                if (toolStripButtonBullets != null) toolStripButtonBullets.Checked = rtfMainText.SelectionBullet;
+
+                // Numeric list state (read from RichEdit paragraph format)
+                ushort numbering = GetCurrentParagraphNumbering(rtfMainText);
+                bool numericOn = numbering != PFN_NONE;
+
+                if (toolButtonBulletsNumeric != null) toolButtonBulletsNumeric.Checked = numericOn;
+            }
+            finally
+            {
+                _updatingParagraphUi = false;
+            }
+        }
 
         private void FontSizeComboBox_Click(object? sender, EventArgs e) { }
 
@@ -1420,8 +1444,7 @@ namespace HSTRYDoc
             UpdateRtfUiFromSelection();
         }
 
-
-        private void FontSizeComboBox_TextChanged(object sender, EventArgs e)
+        private void FontSizeComboBox_TextChanged(object? sender, EventArgs e)
         {
             if (_updatingFontSizeUi) return;
             if (sender is not ToolStripComboBox cb) return;
@@ -1441,7 +1464,6 @@ namespace HSTRYDoc
             ApplySelectionFontSize(rtfMainText, size);
             UpdateRtfUiFromSelection();
         }
-
 
         private static void ApplySelectionFontSize(RichTextBox rtb, float newSize)
         {
@@ -2249,6 +2271,200 @@ namespace HSTRYDoc
             }
         }
 
+        // ============================================================
+        // Paragraph formatting (Alignment + Bullets + Numbering)
+        // ============================================================
+        private void toolButtonAlignLeft_Click(object sender, EventArgs e)
+        {
+            ApplyParagraphAlignment(HorizontalAlignment.Left);
+        }
+
+        private void toolButtonAlignCenter_Click(object sender, EventArgs e)
+        {
+            ApplyParagraphAlignment(HorizontalAlignment.Center);
+        }
+
+        private void toolButtonAlignRight_Click(object sender, EventArgs e)
+        {
+            ApplyParagraphAlignment(HorizontalAlignment.Right);
+        }
+
+        private void ApplyParagraphAlignment(HorizontalAlignment alignment)
+        {
+            _updatingParagraphUi = true;
+            try
+            {
+                rtfMainText.SelectionAlignment = alignment;
+                rtfMainText.Focus();
+            }
+            finally
+            {
+                _updatingParagraphUi = false;
+                UpdateRtfUiFromSelection();
+            }
+        }
+
+        private void toolStripButtonBullets_Click(object sender, EventArgs e)
+        {
+            ToggleBullets();
+        }
+
+        private void ToggleBullets()
+        {
+            _updatingParagraphUi = true;
+            try
+            {
+                bool enable = !rtfMainText.SelectionBullet;
+
+                // Prevent overlap with numeric lists
+                if (enable)
+                {
+                    ApplyDecimalNumbering(enable: false, startAt: 1);
+                    if (toolButtonBulletsNumeric != null) toolButtonBulletsNumeric.Checked = false;
+                }
+
+                rtfMainText.SelectionBullet = enable;
+
+                // Apply a reasonable default layout when enabling bullets (do not destroy custom indents)
+                if (enable)
+                {
+                    if (rtfMainText.BulletIndent == 0) rtfMainText.BulletIndent = 18;
+
+                    if (rtfMainText.SelectionIndent == 0)
+                        rtfMainText.SelectionIndent = 30;
+
+                    if (rtfMainText.SelectionHangingIndent == 0)
+                        rtfMainText.SelectionHangingIndent = 12;
+                }
+                else
+                {
+                    // Keep SelectionIndent as-is; just turn off bullet marker.
+                    rtfMainText.BulletIndent = 0;
+                }
+
+                rtfMainText.Focus();
+            }
+            finally
+            {
+                _updatingParagraphUi = false;
+                UpdateRtfUiFromSelection();
+            }
+        }
+
+        private void toolButtonBulletsNumeric_Click(object sender, EventArgs e)
+        {
+            ToggleNumericBullets();
+        }
+
+        private void ToggleNumericBullets(ushort startAt = 1)
+        {
+            _updatingParagraphUi = true;
+            try
+            {
+                // Determine current numbering state from paragraph format
+                ushort current = GetCurrentParagraphNumbering(rtfMainText);
+                bool enable = current == PFN_NONE;
+
+                // Prevent overlap with normal bullets
+                if (enable)
+                {
+                    rtfMainText.SelectionBullet = false;
+                    if (toolStripButtonBullets != null) toolStripButtonBullets.Checked = false;
+                }
+
+                ApplyDecimalNumbering(enable, startAt);
+
+                rtfMainText.Focus();
+            }
+            finally
+            {
+                _updatingParagraphUi = false;
+                UpdateRtfUiFromSelection();
+            }
+        }
+
+        // ============================================================
+        // RichEdit numbering interop (WinForms RichTextBox)
+        // ============================================================
+
+
+        private void ApplyDecimalNumbering(bool enable, ushort startAt = 1)
+        {
+            if (rtfMainText.IsDisposed) return;
+
+            var pf = new PARAFORMAT2
+            {
+                cbSize = (uint)Marshal.SizeOf<PARAFORMAT2>(),
+                dwMask = PFM_NUMBERING | PFM_NUMBERINGSTART | PFM_OFFSET | PFM_STARTINDENT,
+                wNumbering = enable ? PFN_ARABIC : PFN_NONE,
+                wNumberingStart = startAt,
+
+                // twips (1/1440 inch). 360 = 0.25"
+                dxStartIndent = 360,
+                dxOffset = 360,
+
+                rgxTabs = new int[32]
+            };
+
+            SendMessage(rtfMainText.Handle, EM_SETPARAFORMAT, IntPtr.Zero, ref pf);
+        }
+
+        private static ushort GetCurrentParagraphNumbering(RichTextBox rtb)
+        {
+            if (rtb.IsDisposed) return PFN_NONE;
+
+            var pf = new PARAFORMAT2
+            {
+                cbSize = (uint)Marshal.SizeOf<PARAFORMAT2>(),
+                rgxTabs = new int[32]
+            };
+
+            SendMessage(rtb.Handle, EM_GETPARAFORMAT, IntPtr.Zero, ref pf);
+
+            // wNumbering == 0 => none; else some numbering type (arabic, roman, etc.)
+            return pf.wNumbering;
+        }
+
+        private const int WM_USER = 0x0400;
+        private const int EM_GETPARAFORMAT = WM_USER + 61;
+        private const int EM_SETPARAFORMAT = WM_USER + 71;
+
+        private const uint PFM_STARTINDENT = 0x00000001;
+        private const uint PFM_OFFSET = 0x00000004;
+        private const uint PFM_NUMBERING = 0x00000020;
+        private const uint PFM_NUMBERINGSTART = 0x00008000;
+
+        private const ushort PFN_NONE = 0;
+        private const ushort PFN_ARABIC = 2;
+
+        [StructLayout(LayoutKind.Sequential)]
+        private struct PARAFORMAT2
+        {
+            public uint cbSize;
+            public uint dwMask;
+            public ushort wNumbering;
+            public ushort wReserved;
+            public int dxStartIndent;
+            public int dxRightIndent;
+            public int dxOffset;
+            public ushort wAlignment;
+            public short cTabCount;
+
+            [MarshalAs(UnmanagedType.ByValArray, SizeConst = 32)]
+            public int[] rgxTabs;
+
+            public int dySpaceBefore, dySpaceAfter, dyLineSpacing;
+            public short sStyle;
+            public byte bLineSpacingRule, bOutlineLevel;
+            public ushort wShadingWeight, wShadingStyle;
+            public ushort wNumberingStart;
+            public ushort wNumberingStyle;
+            public ushort wNumberingTab;
+            public ushort wBorderSpace, wBorderWidth, wBorders;
+        }
+
+        [DllImport("user32.dll", CharSet = CharSet.Auto)]
+        private static extern IntPtr SendMessage(IntPtr hWnd, int msg, IntPtr wParam, ref PARAFORMAT2 lParam);
     }
 
     public sealed record ContainerSearchHit(int BlockIndex, string BlockTitle, int IndexInText, string Snippet);

@@ -72,6 +72,9 @@
             FontSizeComboBox = new ToolStripComboBox();
             btnFontSizeMns = new ToolStripButton();
             btnFontSizePls = new ToolStripButton();
+            toolButtonAlignLeft = new ToolStripButton();
+            toolButtonAlignCenter = new ToolStripButton();
+            toolButtonAlignRight = new ToolStripButton();
             dropDownHeader = new ToolStripSplitButton();
             heading1ToolStripMenuItem = new ToolStripMenuItem();
             heading2ToolStripMenuItem = new ToolStripMenuItem();
@@ -79,13 +82,14 @@
             toolStripSeparator3 = new ToolStripSeparator();
             foreColorToolButton = new ToolStripButton();
             backgroundColorToolButton = new ToolStripButton();
+            toolTableInsert = new ToolStripButton();
             toolStripSeparator4 = new ToolStripSeparator();
             toolButtonCopy = new ToolStripButton();
             toolButtonPaste = new ToolStripButton();
             toolButtonCut = new ToolStripButton();
             toolButtonSelectAll = new ToolStripButton();
             toolStripSeparator1 = new ToolStripSeparator();
-            toolTableInsert = new ToolStripButton();
+            toolStripButtonBullets = new ToolStripButton();
             mainMenu = new MenuStrip();
             fileToolStripMenuItem = new ToolStripMenuItem();
             newToolStripMenuItem = new ToolStripMenuItem();
@@ -103,6 +107,7 @@
             helpToolStripMenuItem = new ToolStripMenuItem();
             aboutToolStripMenuItem = new ToolStripMenuItem();
             InactiveIcon = new NotifyIcon(components);
+            toolButtonBulletsNumeric = new ToolStripButton();
             mainToolstrip.SuspendLayout();
             statusStrip1.SuspendLayout();
             ((System.ComponentModel.ISupportInitialize)splitContainer1).BeginInit();
@@ -368,7 +373,7 @@
             // 
             // toolStripRtf
             // 
-            toolStripRtf.Items.AddRange(new ToolStripItem[] { boldToolButton, ItalicToolButton, UnderlineToolButton, StrikeTroughToolButton, toolStripSeparator2, FontSizeComboBox, btnFontSizeMns, btnFontSizePls, dropDownHeader, toolStripSeparator3, foreColorToolButton, backgroundColorToolButton, toolStripSeparator4, toolButtonCopy, toolButtonPaste, toolButtonCut, toolButtonSelectAll, toolStripSeparator1, toolTableInsert });
+            toolStripRtf.Items.AddRange(new ToolStripItem[] { boldToolButton, ItalicToolButton, UnderlineToolButton, StrikeTroughToolButton, toolStripSeparator2, FontSizeComboBox, btnFontSizeMns, btnFontSizePls, toolButtonAlignLeft, toolButtonAlignCenter, toolButtonAlignRight, dropDownHeader, toolStripSeparator3, toolStripButtonBullets, toolButtonBulletsNumeric, foreColorToolButton, backgroundColorToolButton, toolTableInsert, toolStripSeparator4, toolButtonCopy, toolButtonPaste, toolButtonCut, toolStripSeparator1, toolButtonSelectAll });
             toolStripRtf.Location = new Point(0, 0);
             toolStripRtf.Name = "toolStripRtf";
             toolStripRtf.Size = new Size(614, 25);
@@ -444,6 +449,37 @@
             btnFontSizePls.Text = "Font Size (+)";
             btnFontSizePls.Click += btnFontSizePls_Click;
             // 
+            // toolButtonAlignLeft
+            // 
+            toolButtonAlignLeft.DisplayStyle = ToolStripItemDisplayStyle.Image;
+            toolButtonAlignLeft.Image = (Image)resources.GetObject("toolButtonAlignLeft.Image");
+            toolButtonAlignLeft.ImageTransparentColor = Color.Magenta;
+            toolButtonAlignLeft.Name = "toolButtonAlignLeft";
+            toolButtonAlignLeft.Size = new Size(23, 22);
+            toolButtonAlignLeft.Text = "A";
+            toolButtonAlignLeft.ToolTipText = "Text-Alignment Left";
+            toolButtonAlignLeft.Click += toolButtonAlignLeft_Click;
+            // 
+            // toolButtonAlignCenter
+            // 
+            toolButtonAlignCenter.DisplayStyle = ToolStripItemDisplayStyle.Image;
+            toolButtonAlignCenter.Image = (Image)resources.GetObject("toolButtonAlignCenter.Image");
+            toolButtonAlignCenter.ImageTransparentColor = Color.Magenta;
+            toolButtonAlignCenter.Name = "toolButtonAlignCenter";
+            toolButtonAlignCenter.Size = new Size(23, 22);
+            toolButtonAlignCenter.Text = "Text-Alignment Center";
+            toolButtonAlignCenter.Click += toolButtonAlignCenter_Click;
+            // 
+            // toolButtonAlignRight
+            // 
+            toolButtonAlignRight.DisplayStyle = ToolStripItemDisplayStyle.Image;
+            toolButtonAlignRight.Image = (Image)resources.GetObject("toolButtonAlignRight.Image");
+            toolButtonAlignRight.ImageTransparentColor = Color.Magenta;
+            toolButtonAlignRight.Name = "toolButtonAlignRight";
+            toolButtonAlignRight.Size = new Size(23, 22);
+            toolButtonAlignRight.Text = "Text-Alignment Right";
+            toolButtonAlignRight.Click += toolButtonAlignRight_Click;
+            // 
             // dropDownHeader
             // 
             dropDownHeader.DisplayStyle = ToolStripItemDisplayStyle.Image;
@@ -501,6 +537,16 @@
             backgroundColorToolButton.Size = new Size(23, 22);
             backgroundColorToolButton.Text = "Text-Backcolor";
             // 
+            // toolTableInsert
+            // 
+            toolTableInsert.DisplayStyle = ToolStripItemDisplayStyle.Image;
+            toolTableInsert.Image = (Image)resources.GetObject("toolTableInsert.Image");
+            toolTableInsert.ImageTransparentColor = Color.Magenta;
+            toolTableInsert.Name = "toolTableInsert";
+            toolTableInsert.Size = new Size(23, 22);
+            toolTableInsert.Text = "Insert Table...";
+            toolTableInsert.Click += toolTableInsert_Click;
+            // 
             // toolStripSeparator4
             // 
             toolStripSeparator4.Name = "toolStripSeparator4";
@@ -547,15 +593,15 @@
             toolStripSeparator1.Name = "toolStripSeparator1";
             toolStripSeparator1.Size = new Size(6, 25);
             // 
-            // toolTableInsert
+            // toolStripButtonBullets
             // 
-            toolTableInsert.DisplayStyle = ToolStripItemDisplayStyle.Image;
-            toolTableInsert.Image = (Image)resources.GetObject("toolTableInsert.Image");
-            toolTableInsert.ImageTransparentColor = Color.Magenta;
-            toolTableInsert.Name = "toolTableInsert";
-            toolTableInsert.Size = new Size(23, 22);
-            toolTableInsert.Text = "Insert Table...";
-            toolTableInsert.Click += toolTableInsert_Click;
+            toolStripButtonBullets.DisplayStyle = ToolStripItemDisplayStyle.Image;
+            toolStripButtonBullets.Image = (Image)resources.GetObject("toolStripButtonBullets.Image");
+            toolStripButtonBullets.ImageTransparentColor = Color.Magenta;
+            toolStripButtonBullets.Name = "toolStripButtonBullets";
+            toolStripButtonBullets.Size = new Size(23, 22);
+            toolStripButtonBullets.Text = "Insert Bulletpoints";
+            toolStripButtonBullets.Click += toolStripButtonBullets_Click;
             // 
             // mainMenu
             // 
@@ -676,6 +722,16 @@
             InactiveIcon.Text = "notifyIcon1";
             InactiveIcon.Visible = true;
             // 
+            // toolButtonBulletsNumeric
+            // 
+            toolButtonBulletsNumeric.DisplayStyle = ToolStripItemDisplayStyle.Image;
+            toolButtonBulletsNumeric.Image = (Image)resources.GetObject("toolButtonBulletsNumeric.Image");
+            toolButtonBulletsNumeric.ImageTransparentColor = Color.Magenta;
+            toolButtonBulletsNumeric.Name = "toolButtonBulletsNumeric";
+            toolButtonBulletsNumeric.Size = new Size(23, 22);
+            toolButtonBulletsNumeric.Text = "Insert Numeric Bulletpoints";
+            toolButtonBulletsNumeric.Click += toolButtonBulletsNumeric_Click;
+            // 
             // hsMain
             // 
             AutoScaleDimensions = new SizeF(7F, 15F);
@@ -783,5 +839,10 @@
         private ToolStripSeparator toolStripSeparator1;
         private ToolStripButton toolTableInsert;
         private ToolStripMenuItem keyManagementToolStripMenuItem;
+        private ToolStripButton toolButtonAlignLeft;
+        private ToolStripButton toolButtonAlignCenter;
+        private ToolStripButton toolButtonAlignRight;
+        private ToolStripButton toolStripButtonBullets;
+        private ToolStripButton toolButtonBulletsNumeric;
     }
 }
