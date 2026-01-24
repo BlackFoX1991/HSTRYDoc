@@ -39,7 +39,7 @@
             lblText.AutoSize = true;
             lblText.Location = new Point(12, 62);
             lblText.Name = "lblText";
-            lblText.Size = new Size(31, 15);
+            lblText.Size = new Size(39, 20);
             lblText.TabIndex = 1;
             lblText.Text = "Text:";
             // 
@@ -47,7 +47,7 @@
             // 
             txtInput.Location = new Point(60, 59);
             txtInput.Name = "txtInput";
-            txtInput.Size = new Size(388, 23);
+            txtInput.Size = new Size(388, 27);
             txtInput.TabIndex = 2;
             // 
             // btnOk

@@ -35,7 +35,7 @@
             txtQuery.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right;
             txtQuery.Location = new Point(60, 12);
             txtQuery.Name = "txtQuery";
-            txtQuery.Size = new Size(348, 23);
+            txtQuery.Size = new Size(348, 27);
             txtQuery.TabIndex = 1;
             // 
             // chkMatchCase
@@ -43,7 +43,7 @@
             chkMatchCase.AutoSize = true;
             chkMatchCase.Location = new Point(60, 48);
             chkMatchCase.Name = "chkMatchCase";
-            chkMatchCase.Size = new Size(86, 19);
+            chkMatchCase.Size = new Size(105, 24);
             chkMatchCase.TabIndex = 2;
             chkMatchCase.Text = "Match case";
             // 
@@ -52,7 +52,7 @@
             chkWholeWord.AutoSize = true;
             chkWholeWord.Location = new Point(60, 74);
             chkWholeWord.Name = "chkWholeWord";
-            chkWholeWord.Size = new Size(90, 19);
+            chkWholeWord.Size = new Size(112, 24);
             chkWholeWord.TabIndex = 3;
             chkWholeWord.Text = "Whole word";
             // 
@@ -63,7 +63,7 @@
             chkWrap.CheckState = CheckState.Checked;
             chkWrap.Location = new Point(60, 100);
             chkWrap.Name = "chkWrap";
-            chkWrap.Size = new Size(54, 19);
+            chkWrap.Size = new Size(67, 24);
             chkWrap.TabIndex = 4;
             chkWrap.Text = "Wrap";
             // 
@@ -88,7 +88,7 @@
             lblQuery.AutoSize = true;
             lblQuery.Location = new Point(12, 15);
             lblQuery.Name = "lblQuery";
-            lblQuery.Size = new Size(33, 15);
+            lblQuery.Size = new Size(40, 20);
             lblQuery.TabIndex = 0;
             lblQuery.Text = "Find:";
             // 
