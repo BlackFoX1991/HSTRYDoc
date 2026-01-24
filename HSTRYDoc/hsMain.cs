@@ -207,6 +207,40 @@ namespace HSTRYDoc
         }
 
         // ============================================================
+        // NEW: Interactive key selection dialog (Default vs USB(HSTRY_KEY) vs Manual)
+        // ============================================================
+        private bool ResolvePrivateKeyInteractive(string containerPath, out string privateKeyPath)
+        {
+            privateKeyPath = string.Empty;
+
+            // Ensure default key pair exists if possible (so "Default" option can be used)
+            EnsureDefaultKeyPair();
+
+            string defaultKey = GetDefaultOwnerPrivateKeyPath();
+
+            using var dlg = new KeySourceDialog(defaultKey)
+            {
+                StartPosition = FormStartPosition.CenterParent
+            };
+
+            if (dlg.ShowDialog(this) != DialogResult.OK)
+                return false;
+
+            string? chosen = dlg.SelectedPrivateKeyPath;
+
+            if (string.IsNullOrWhiteSpace(chosen) || !File.Exists(chosen))
+            {
+                MessageBox.Show(this, "No valid private key was selected.", "Private key",
+                    MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return false;
+            }
+
+            privateKeyPath = chosen;
+            _privateKeyPath = chosen;
+            return true;
+        }
+
+        // ============================================================
         // Auto-complete (dynamic word suggestions)
         // ============================================================
         private void InitAutoComplete()
@@ -486,11 +520,12 @@ namespace HSTRYDoc
         }
 
         // ============================================================
-        // V2-only open (private key file)
+        // V2-only open (private key file)  [UPDATED: uses KeySourceDialog]
         // ============================================================
         private bool OpenContainerFromPath(string path)
         {
-            if (!TryResolvePrivateKeyForOpen(path, out string privPath))
+            // NEW behavior: always ask where to load keys from when opening a container
+            if (!ResolvePrivateKeyInteractive(path, out string privPath))
                 return false;
 
             try
@@ -2382,7 +2417,6 @@ namespace HSTRYDoc
                 UpdateRtfUiFromSelection();
             }
         }
-
 
         private void ApplyDecimalNumbering(bool enable, ushort startAt = 1)
         {
