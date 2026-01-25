@@ -1,10 +1,12 @@
-﻿// Container.cs (V2-only, multi-recipient + owner-signed header)
-// - No password/PBKDF2/v1 support.
+﻿// Container.cs (V3 current, supports loading V2 and V3)
+// - V2: Title stored plaintext, bound into AD (legacy).
+// - V3: Title is AES-GCM encrypted (separate AEAD payload), not stored plaintext.
 // - Data encryption: AES-GCM with random DEK (32 bytes).
 // - Key distribution: DEK wrapped per recipient via RSA-OAEP-SHA256.
 // - Tamper prevention for recipients/header: owner signs header via RSA-PSS-SHA256.
 //   Any add/remove recipient requires owner private key to re-sign.
 //   Load verifies header signature before unwrapping DEK.
+// - Chain: PrevHash is authenticated via AD (so edits require re-encrypt of subsequent blocks).
 
 using System;
 using System.Buffers.Binary;
@@ -18,10 +20,19 @@ namespace HSTRYDoc
 {
     public sealed class HSTRYContainer
     {
-        public const byte CurrentVersion = 2;
+        // Current on-disk format
+        public const byte CurrentVersion = 3;
 
         private const byte RECIPIENT_ALG_RSA_OAEP_SHA256 = 1;
         private const byte HEADER_SIGALG_RSA_PSS_SHA256 = 1;
+
+        // Block AEAD purpose bytes (V3)
+        private const byte AD_PURPOSE_TITLE = 1;
+        private const byte AD_PURPOSE_BODY = 2;
+
+        // V2 support
+        private const byte V2 = 2;
+        private const byte V3 = 3;
 
         public byte Version { get; private set; } = CurrentVersion;
 
@@ -43,7 +54,15 @@ namespace HSTRYDoc
         // DEK held in memory while container is open (AES-256)
         private byte[] _key = Array.Empty<byte>();
 
+        // Cached encoding for RTF bytes
+        private Encoding? _encCache;
+
+        private static readonly byte[] ZeroHash = new byte[Crypto.Sha256Size];
+
         private HSTRYContainer() { }
+
+        private Encoding GetContainerEncoding()
+            => _encCache ??= Encoding.GetEncoding(EncodingWebName);
 
         // ============================================================
         // Key files (private key as file)
@@ -104,7 +123,7 @@ namespace HSTRYDoc
         // ============================================================
 
         /// <summary>
-        /// Create a new container (V2).
+        /// Create a new container (V3 current).
         /// - ownerPrivateKey signs the header.
         /// - recipients are the public keys that can open the container (should include owner).
         /// </summary>
@@ -127,6 +146,7 @@ namespace HSTRYDoc
 
             var enc = encoding ?? Global.CurrentEditorEncoding;
             c.EncodingWebName = enc.WebName;
+            c._encCache = null;
 
             c.OwnerPublicKeySpki = ownerPrivateKey.ExportSubjectPublicKeyInfo();
             c.HeaderSignatureAlg = HEADER_SIGALG_RSA_PSS_SHA256;
@@ -161,9 +181,11 @@ namespace HSTRYDoc
 
         public static HSTRYContainer LoadWithPrivateKeyFile(string containerPath, string privateKeyPath)
         {
-            using var fs = File.OpenRead(containerPath);
+            // Large buffering improves throughput for big containers
+            using var fs = new FileStream(containerPath, FileMode.Open, FileAccess.Read, FileShare.Read, bufferSize: 1 << 20);
+            using var bs = new BufferedStream(fs, 1 << 20);
             using var rsaPriv = RsaKeyFiles.LoadPrivateKeyPkcs8(privateKeyPath);
-            return LoadWithPrivateKey(fs, rsaPriv);
+            return LoadWithPrivateKey(bs, rsaPriv);
         }
 
         public static HSTRYContainer LoadWithPrivateKey(Stream stream, RSA privateKey)
@@ -177,7 +199,7 @@ namespace HSTRYDoc
                 throw new InvalidDataException("Invalid file format (magic mismatch).");
 
             byte version = br.ReadByte();
-            if (version != CurrentVersion)
+            if (version != V2 && version != V3)
                 throw new InvalidDataException($"Unsupported container version: {version}.");
 
             var c = new HSTRYContainer { Version = version };
@@ -185,6 +207,7 @@ namespace HSTRYDoc
             // ----- Header (unsigned parts first) -----
             int encNameLen = br.ReadByte();
             c.EncodingWebName = Encoding.UTF8.GetString(br.ReadBytes(encNameLen));
+            c._encCache = null;
 
             ushort ownerPubLen = br.ReadUInt16();
             c.OwnerPublicKeySpki = br.ReadBytes(ownerPubLen);
@@ -253,19 +276,50 @@ namespace HSTRYDoc
                     Index = br.ReadInt32()
                 };
 
-                ushort titleLen = br.ReadUInt16();
-                b.Title = Encoding.UTF8.GetString(br.ReadBytes(titleLen));
+                if (version == V2)
+                {
+                    // V2: plaintext title
+                    ushort titleLen = br.ReadUInt16();
+                    b.Title = Encoding.UTF8.GetString(br.ReadBytes(titleLen));
 
-                b.CreatedUtc = new DateTimeOffset(br.ReadInt64(), TimeSpan.Zero);
-                b.ModifiedUtc = new DateTimeOffset(br.ReadInt64(), TimeSpan.Zero);
+                    b.CreatedUtc = new DateTimeOffset(br.ReadInt64(), TimeSpan.Zero);
+                    b.ModifiedUtc = new DateTimeOffset(br.ReadInt64(), TimeSpan.Zero);
 
-                b.PrevHash = br.ReadBytes(Crypto.Sha256Size);
+                    b.PrevHash = br.ReadBytes(Crypto.Sha256Size);
 
-                b.Nonce = br.ReadBytes(Crypto.AesGcmNonceSize);
-                b.Tag = br.ReadBytes(Crypto.AesGcmTagSize);
+                    b.Nonce = br.ReadBytes(Crypto.AesGcmNonceSize);
+                    b.Tag = br.ReadBytes(Crypto.AesGcmTagSize);
 
-                int ctLen = br.ReadInt32();
-                b.Ciphertext = br.ReadBytes(ctLen);
+                    int ctLen = br.ReadInt32();
+                    b.Ciphertext = br.ReadBytes(ctLen);
+                }
+                else // V3
+                {
+                    // V3: encrypted title + encrypted body
+                    b.CreatedUtc = new DateTimeOffset(br.ReadInt64(), TimeSpan.Zero);
+                    b.ModifiedUtc = new DateTimeOffset(br.ReadInt64(), TimeSpan.Zero);
+
+                    b.PrevHash = br.ReadBytes(Crypto.Sha256Size);
+
+                    // Title payload
+                    b.TitleNonce = br.ReadBytes(Crypto.AesGcmNonceSize);
+                    b.TitleTag = br.ReadBytes(Crypto.AesGcmTagSize);
+
+                    int titleCtLen = br.ReadInt32();
+                    if (titleCtLen < 0) throw new InvalidDataException("Invalid title ciphertext length.");
+                    b.TitleCiphertext = br.ReadBytes(titleCtLen);
+
+                    // Body payload
+                    b.Nonce = br.ReadBytes(Crypto.AesGcmNonceSize);
+                    b.Tag = br.ReadBytes(Crypto.AesGcmTagSize);
+
+                    int ctLen = br.ReadInt32();
+                    if (ctLen < 0) throw new InvalidDataException("Invalid ciphertext length.");
+                    b.Ciphertext = br.ReadBytes(ctLen);
+
+                    // Title plaintext will be hydrated during Validate()
+                    b.Title = string.Empty;
+                }
 
                 c._blocks.Add(b);
             }
@@ -281,13 +335,25 @@ namespace HSTRYDoc
         // ============================================================
         public void Save(string path)
         {
-            using var fs = File.Create(path);
-            Save(fs);
+            // Large buffering improves throughput for big containers
+            using var fs = new FileStream(path, FileMode.Create, FileAccess.Write, FileShare.None, bufferSize: 1 << 20);
+            using var bs = new BufferedStream(fs, 1 << 20);
+            Save(bs);
         }
 
         public void Save(Stream stream)
         {
             EnsureKey();
+
+            // If this container was loaded as V2, upgrade it to V3 on save
+            if (Version == V2)
+            {
+                UpgradeV2ToV3();
+            }
+
+            if (Version != V3)
+                throw new InvalidOperationException($"Unsupported save version: {Version}.");
+
             EnsureHeaderSigned();
 
             using var bw = new BinaryWriter(stream, Encoding.UTF8, leaveOpen: true);
@@ -337,25 +403,34 @@ namespace HSTRYDoc
 
             bw.Write(_blocks.Count);
             foreach (var b in _blocks)
-                WriteBlock(bw, b);
+                WriteBlockV3(bw, b);
         }
 
-        private static void WriteBlock(BinaryWriter bw, Block b)
+        private static void WriteBlockV3(BinaryWriter bw, Block b)
         {
             bw.Write(b.Index);
-
-            byte[] titleBytes = Encoding.UTF8.GetBytes(b.Title ?? string.Empty);
-            bw.Write((ushort)titleBytes.Length);
-            bw.Write(titleBytes);
 
             bw.Write(b.CreatedUtc.UtcTicks);
             bw.Write(b.ModifiedUtc.UtcTicks);
 
             bw.Write(b.PrevHash);
 
+            // Title payload
+            if (b.TitleCiphertext == null || b.TitleCiphertext.Length == 0)
+                throw new InvalidDataException("Encrypted title is missing (V3).");
+            if (b.TitleNonce == null || b.TitleNonce.Length != Crypto.AesGcmNonceSize)
+                throw new InvalidDataException("Title nonce missing/invalid (V3).");
+            if (b.TitleTag == null || b.TitleTag.Length != Crypto.AesGcmTagSize)
+                throw new InvalidDataException("Title tag missing/invalid (V3).");
+
+            bw.Write(b.TitleNonce);
+            bw.Write(b.TitleTag);
+            bw.Write(b.TitleCiphertext.Length);
+            bw.Write(b.TitleCiphertext);
+
+            // Body payload
             bw.Write(b.Nonce);
             bw.Write(b.Tag);
-
             bw.Write(b.Ciphertext.Length);
             bw.Write(b.Ciphertext);
         }
@@ -364,7 +439,6 @@ namespace HSTRYDoc
         // Recipient management (owner-signed)
         // ============================================================
 
-        // Compatibility overloads: keep compilation for old call sites, but enforce owner signing.
         [Obsolete("Owner private key is required to modify recipients (header is signed). Use AddRecipient(ownerPrivateKey, recipientPublicKey).")]
         public void AddRecipient(RSA recipientPublicKey)
             => throw new InvalidOperationException("Owner private key is required to add recipients (signed header).");
@@ -437,10 +511,6 @@ namespace HSTRYDoc
 
         private byte[] BuildHeaderSigningData()
         {
-            // Canonical binary encoding of the header fields to be signed:
-            // version(1) + encNameLen(1)+encName + ownerPubLen(2)+ownerPub +
-            // recipientCount(4) + each recipient:
-            //   keyIdLen(1)+keyId + alg(1) + wrappedLen(2) + wrapped
             using var ms = new MemoryStream();
             using var bw = new BinaryWriter(ms, Encoding.UTF8, leaveOpen: true);
 
@@ -533,11 +603,15 @@ namespace HSTRYDoc
                 Title = title,
                 CreatedUtc = DateTimeOffset.UtcNow,
                 ModifiedUtc = DateTimeOffset.UtcNow,
-                PrevHash = _blocks.Count == 0 ? new byte[Crypto.Sha256Size] : ComputeBlockHash(_blocks[^1])
+                PrevHash = _blocks.Count == 0 ? ZeroHash.ToArray() : ComputeBlockHash(_blocks[^1])
             };
 
-            byte[] plaintext = Encoding.GetEncoding(EncodingWebName).GetBytes(rtf ?? string.Empty);
-            EncryptInto(b, plaintext);
+            // Encrypt title (V3)
+            EncryptTitleInto(b, title);
+
+            // Encrypt body
+            byte[] plaintext = GetContainerEncoding().GetBytes(rtf ?? string.Empty);
+            EncryptBodyInto(b, plaintext);
 
             _blocks.Add(b);
             return b;
@@ -548,9 +622,9 @@ namespace HSTRYDoc
             EnsureKey();
             var b = GetBlock(index);
 
-            byte[] ad = BlockAuth.BuildAssociatedData(Version, b);
+            byte[] ad = BlockAuth.BuildAssociatedData(Version, b, AD_PURPOSE_BODY);
             byte[] pt = Crypto.DecryptAesGcm(_key, b.Nonce, b.Ciphertext, b.Tag, ad);
-            return Encoding.GetEncoding(EncodingWebName).GetString(pt);
+            return GetContainerEncoding().GetString(pt);
         }
 
         public void UpdateRtfDocument(int index, string newRtf)
@@ -560,8 +634,11 @@ namespace HSTRYDoc
 
             b.ModifiedUtc = DateTimeOffset.UtcNow;
 
-            byte[] pt = Encoding.GetEncoding(EncodingWebName).GetBytes(newRtf ?? string.Empty);
-            EncryptInto(b, pt);
+            // Update title payload too because ModifiedUtc is in AD
+            EncryptTitleInto(b, b.Title);
+
+            byte[] pt = GetContainerEncoding().GetBytes(newRtf ?? string.Empty);
+            EncryptBodyInto(b, pt);
 
             ReencryptFrom(index + 1);
         }
@@ -578,14 +655,14 @@ namespace HSTRYDoc
             if (_blocks.Count == 0)
                 return;
 
+            // Renumber
             for (int i = index; i < _blocks.Count; i++)
                 _blocks[i].Index = i;
 
-            _blocks[0].PrevHash = new byte[Crypto.Sha256Size];
+            // Fix block 0 prevhash
+            _blocks[0].PrevHash = ZeroHash.ToArray();
 
-            for (int i = 1; i < _blocks.Count; i++)
-                _blocks[i].PrevHash = ComputeBlockHash(_blocks[i - 1]);
-
+            // Re-encrypt from index (chain must be rebuilt due to index and prevhash changes)
             ReencryptFrom(index);
         }
 
@@ -601,13 +678,15 @@ namespace HSTRYDoc
 
             var b = GetBlock(index);
 
-            byte[] oldAd = BlockAuth.BuildAssociatedData(Version, b);
-            byte[] pt = Crypto.DecryptAesGcm(_key, b.Nonce, b.Ciphertext, b.Tag, oldAd);
+            // Decrypt body (because ModifiedUtc changes => AD changes)
+            byte[] oldBodyAd = BlockAuth.BuildAssociatedData(Version, b, AD_PURPOSE_BODY);
+            byte[] bodyPt = Crypto.DecryptAesGcm(_key, b.Nonce, b.Ciphertext, b.Tag, oldBodyAd);
 
             b.Title = newTitle;
             b.ModifiedUtc = DateTimeOffset.UtcNow;
 
-            EncryptInto(b, pt);
+            EncryptTitleInto(b, b.Title);
+            EncryptBodyInto(b, bodyPt);
 
             ReencryptFrom(index + 1);
         }
@@ -644,43 +723,68 @@ namespace HSTRYDoc
             ResignHeader(newOwnerPrivateKey);
         }
 
+        // ============================================================
+        // Hash / Validate (optimized, secure)
+        // ============================================================
 
         public byte[] ComputeBlockHash(Block b)
         {
-            byte[] titleBytes = Encoding.UTF8.GetBytes(b.Title ?? string.Empty);
+            // V2 hash includes plaintext title (because it is stored plaintext and part of legacy AD)
+            // V3 hash includes title AEAD payload (nonce/tag/ciphertext), not plaintext title.
 
+            Span<byte> b1 = stackalloc byte[1];
             Span<byte> i4 = stackalloc byte[4];
             Span<byte> i8 = stackalloc byte[8];
-            Span<byte> u2 = stackalloc byte[2];
 
-            using var sha = SHA256.Create();
+            using var ih = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
 
-            sha.TransformBlock(new[] { Version }, 0, 1, null, 0);
+            b1[0] = Version;
+            ih.AppendData(b1);
 
             BinaryPrimitives.WriteInt32LittleEndian(i4, b.Index);
-            sha.TransformBlock(i4.ToArray(), 0, 4, null, 0);
+            ih.AppendData(i4);
 
             BinaryPrimitives.WriteInt64LittleEndian(i8, b.CreatedUtc.UtcTicks);
-            sha.TransformBlock(i8.ToArray(), 0, 8, null, 0);
+            ih.AppendData(i8);
 
             BinaryPrimitives.WriteInt64LittleEndian(i8, b.ModifiedUtc.UtcTicks);
-            sha.TransformBlock(i8.ToArray(), 0, 8, null, 0);
+            ih.AppendData(i8);
 
-            sha.TransformBlock(b.PrevHash, 0, b.PrevHash.Length, null, 0);
+            ih.AppendData(b.PrevHash);
 
-            BinaryPrimitives.WriteUInt16LittleEndian(u2, (ushort)titleBytes.Length);
-            sha.TransformBlock(u2.ToArray(), 0, 2, null, 0);
-            sha.TransformBlock(titleBytes, 0, titleBytes.Length, null, 0);
+            if (Version == V2)
+            {
+                byte[] titleBytes = Encoding.UTF8.GetBytes(b.Title ?? string.Empty);
+                Span<byte> u2 = stackalloc byte[2];
+                BinaryPrimitives.WriteUInt16LittleEndian(u2, (ushort)titleBytes.Length);
+                ih.AppendData(u2);
+                ih.AppendData(titleBytes);
+            }
+            else
+            {
+                // V3 title payload
+                Span<byte> tlen = stackalloc byte[4];
+                BinaryPrimitives.WriteInt32LittleEndian(tlen, b.TitleCiphertext?.Length ?? 0);
 
-            sha.TransformBlock(b.Nonce, 0, b.Nonce.Length, null, 0);
-            sha.TransformBlock(b.Tag, 0, b.Tag.Length, null, 0);
+                ih.AppendData(b.TitleNonce);
+                ih.AppendData(b.TitleTag);
+                ih.AppendData(tlen);
+                if (b.TitleCiphertext != null && b.TitleCiphertext.Length > 0)
+                    ih.AppendData(b.TitleCiphertext);
+            }
 
-            BinaryPrimitives.WriteInt32LittleEndian(i4, b.Ciphertext.Length);
-            sha.TransformBlock(i4.ToArray(), 0, 4, null, 0);
+            // Body payload
+            Span<byte> clen = stackalloc byte[4];
+            BinaryPrimitives.WriteInt32LittleEndian(clen, b.Ciphertext?.Length ?? 0);
 
-            sha.TransformFinalBlock(b.Ciphertext, 0, b.Ciphertext.Length);
+            ih.AppendData(b.Nonce);
+            ih.AppendData(b.Tag);
+            ih.AppendData(clen);
 
-            return sha.Hash!;
+            if (b.Ciphertext != null && b.Ciphertext.Length > 0)
+                ih.AppendData(b.Ciphertext);
+
+            return ih.GetHashAndReset();
         }
 
         public bool Validate(out string error)
@@ -688,7 +792,29 @@ namespace HSTRYDoc
             EnsureKey();
             error = string.Empty;
 
-            for (int i = 0; i < _blocks.Count; i++)
+            if (_blocks.Count == 0)
+                return true;
+
+            // block 0 checks
+            if (_blocks[0].Index != 0)
+            {
+                error = "Index mismatch at block 0.";
+                return false;
+            }
+
+            if (!_blocks[0].PrevHash.SequenceEqual(ZeroHash))
+            {
+                error = "PrevHash of block 0 must be 32 zero bytes.";
+                return false;
+            }
+
+            // Validate block 0 AEAD(s)
+            if (!ValidateAndHydrateBlock(_blocks[0], out error, out _))
+                return false;
+
+            byte[] prevHash = ComputeBlockHash(_blocks[0]);
+
+            for (int i = 1; i < _blocks.Count; i++)
             {
                 var b = _blocks[i];
 
@@ -698,37 +824,53 @@ namespace HSTRYDoc
                     return false;
                 }
 
-                if (i == 0)
+                if (!b.PrevHash.SequenceEqual(prevHash))
                 {
-                    if (!b.PrevHash.SequenceEqual(new byte[Crypto.Sha256Size]))
-                    {
-                        error = "PrevHash of block 0 must be 32 zero bytes.";
-                        return false;
-                    }
-                }
-                else
-                {
-                    var expectedPrev = ComputeBlockHash(_blocks[i - 1]);
-                    if (!b.PrevHash.SequenceEqual(expectedPrev))
-                    {
-                        error = $"PrevHash mismatch at block {i}.";
-                        return false;
-                    }
-                }
-
-                try
-                {
-                    byte[] ad = BlockAuth.BuildAssociatedData(Version, b);
-                    _ = Crypto.DecryptAesGcm(_key, b.Nonce, b.Ciphertext, b.Tag, ad);
-                }
-                catch
-                {
-                    error = $"Authenticity check failed at block {i} (Tag mismatch).";
+                    error = $"PrevHash mismatch at block {i}.";
                     return false;
                 }
+
+                if (!ValidateAndHydrateBlock(b, out error, out _))
+                    return false;
+
+                prevHash = ComputeBlockHash(b);
             }
 
             return true;
+        }
+
+        private bool ValidateAndHydrateBlock(Block b, out string error, out byte[]? bodyPlaintext)
+        {
+            error = string.Empty;
+            bodyPlaintext = null;
+
+            try
+            {
+                if (Version == V2)
+                {
+                    // V2: only body AEAD; AD binds plaintext title
+                    byte[] ad = BlockAuth.BuildAssociatedData(Version, b, 0);
+                    bodyPlaintext = Crypto.DecryptAesGcm(_key, b.Nonce, b.Ciphertext, b.Tag, ad);
+                    return true;
+                }
+                else
+                {
+                    // V3: title AEAD + body AEAD
+                    byte[] adTitle = BlockAuth.BuildAssociatedData(Version, b, AD_PURPOSE_TITLE);
+                    byte[] titlePt = Crypto.DecryptAesGcm(_key, b.TitleNonce, b.TitleCiphertext, b.TitleTag, adTitle);
+                    b.Title = Encoding.UTF8.GetString(titlePt);
+
+                    byte[] adBody = BlockAuth.BuildAssociatedData(Version, b, AD_PURPOSE_BODY);
+                    bodyPlaintext = Crypto.DecryptAesGcm(_key, b.Nonce, b.Ciphertext, b.Tag, adBody);
+
+                    return true;
+                }
+            }
+            catch
+            {
+                error = $"Authenticity check failed at block {b.Index} (Tag mismatch).";
+                return false;
+            }
         }
 
         // ============================================================
@@ -736,25 +878,53 @@ namespace HSTRYDoc
         // ============================================================
         private void ReencryptFrom(int startIndex)
         {
+            if (_blocks.Count == 0) return;
+
             if (startIndex <= 0) startIndex = 1;
+            if (startIndex >= _blocks.Count) return;
+
+            // rolling hash of previous block (already consistent)
+            byte[] prevHash = ComputeBlockHash(_blocks[startIndex - 1]);
 
             for (int i = startIndex; i < _blocks.Count; i++)
             {
-                var prev = _blocks[i - 1];
                 var cur = _blocks[i];
 
-                byte[] oldAd = BlockAuth.BuildAssociatedData(Version, cur);
-                byte[] pt = Crypto.DecryptAesGcm(_key, cur.Nonce, cur.Ciphertext, cur.Tag, oldAd);
+                // decrypt current body plaintext
+                byte[] oldBodyAd = BlockAuth.BuildAssociatedData(Version, cur, AD_PURPOSE_BODY);
+                byte[] bodyPt = Crypto.DecryptAesGcm(_key, cur.Nonce, cur.Ciphertext, cur.Tag, oldBodyAd);
 
-                cur.PrevHash = ComputeBlockHash(prev);
+                // update PrevHash
+                cur.PrevHash = prevHash;
 
-                EncryptInto(cur, pt);
+                // re-encrypt title (because PrevHash in AD)
+                EncryptTitleInto(cur, cur.Title);
+
+                // re-encrypt body
+                EncryptBodyInto(cur, bodyPt);
+
+                // update rolling prevHash for next block
+                prevHash = ComputeBlockHash(cur);
             }
         }
 
-        private void EncryptInto(Block b, byte[] plaintext)
+        private void EncryptTitleInto(Block b, string title)
         {
-            byte[] ad = BlockAuth.BuildAssociatedData(Version, b);
+            if (Version == V2)
+                return; // V2 titles are plaintext
+
+            byte[] titleBytes = Encoding.UTF8.GetBytes(title ?? string.Empty);
+            byte[] ad = BlockAuth.BuildAssociatedData(Version, b, AD_PURPOSE_TITLE);
+            var (nonce, ct, tag) = Crypto.EncryptAesGcm(_key, titleBytes, ad);
+
+            b.TitleNonce = nonce;
+            b.TitleCiphertext = ct;
+            b.TitleTag = tag;
+        }
+
+        private void EncryptBodyInto(Block b, byte[] plaintext)
+        {
+            byte[] ad = BlockAuth.BuildAssociatedData(Version, b, (Version == V2) ? (byte)0 : AD_PURPOSE_BODY);
             var (nonce, ct, tag) = Crypto.EncryptAesGcm(_key, plaintext, ad);
 
             b.Nonce = nonce;
@@ -784,6 +954,63 @@ namespace HSTRYDoc
                 Array.Clear(_key, 0, _key.Length);
                 _key = Array.Empty<byte>();
             }
+        }
+
+        // ============================================================
+        // V2 -> V3 upgrade (secure)
+        // ============================================================
+        private void UpgradeV2ToV3()
+        {
+            if (Version != V2)
+                return;
+
+            // Decrypt all V2 bodies first (using V2 AD that includes plaintext title)
+            var bodyPlain = new List<byte[]>(_blocks.Count);
+
+            for (int i = 0; i < _blocks.Count; i++)
+            {
+                var b = _blocks[i];
+
+                // ensure indices consistent for AD in v2
+                if (b.Index != i)
+                    throw new InvalidDataException("Cannot upgrade: invalid indices.");
+
+                byte[] adV2 = BlockAuth.BuildAssociatedData(V2, b, 0);
+                byte[] pt = Crypto.DecryptAesGcm(_key, b.Nonce, b.Ciphertext, b.Tag, adV2);
+
+                bodyPlain.Add(pt);
+            }
+
+            // Switch to V3 and rebuild the full chain securely
+            Version = V3;
+
+            // block 0 prevhash
+            if (_blocks.Count > 0)
+                _blocks[0].PrevHash = ZeroHash.ToArray();
+
+            for (int i = 0; i < _blocks.Count; i++)
+            {
+                var b = _blocks[i];
+                b.Index = i;
+
+                if (i == 0)
+                {
+                    b.PrevHash = ZeroHash.ToArray();
+                }
+                else
+                {
+                    // previous block hash is already V3 hash because we have re-encrypted previous in loop
+                    b.PrevHash = ComputeBlockHash(_blocks[i - 1]);
+                }
+
+                // Encrypt title + body with V3 AD
+                EncryptTitleInto(b, b.Title);
+                EncryptBodyInto(b, bodyPlain[i]);
+            }
+
+            // After upgrade, validate for sanity
+            if (!Validate(out string error))
+                throw new InvalidDataException("Upgrade failed: " + error);
         }
     }
 

@@ -20,24 +20,34 @@ namespace HSTRYDoc
         // PDF: full file path. RTF/TXT: folder path.
         private string _outputPath = string.Empty;
 
+        // Track checked blocks in O(1), avoids scanning list on every UI change
+        private readonly HashSet<int> _checked = new();
+
         public exporterDiag(HSTRYContainer container)
         {
             _container = container ?? throw new ArgumentNullException(nameof(container));
             InitializeComponent();
 
-            // Optional: make your dialog texts English at runtime without touching designer
+            // English UI strings
             Text = "Export blocks...";
             grpFileFormat.Text = "File format";
             grpOutput.Text = "Output";
             label1.Text =
                 "Select the blocks you want to export.\r\n" +
                 "PDF exports into a single multi-page file.\r\n" +
-                "RTF/TXT export creates multiple files in the chosen folder.";
+                "RTF/TXT export creates multiple files in the chosen folder.\r\n" +
+                "Hashes are computed on demand to keep the dialog responsive.";
+
+            // Columns (optional rename; safe even if already set)
+            colName.Text = "Block";
+            colHash.Text = "Hash (on demand)";
+            colSize.Text = "Size";
+            colCreated.Text = "Created";
+            colChanged.Text = "Modified";
 
             btnExport.Text = "Export";
             btnCancel.Text = "Cancel";
 
-            // Default
             radioPdf.Checked = true;
 
             // Wire events
@@ -50,13 +60,28 @@ namespace HSTRYDoc
             radioRtf.CheckedChanged += (_, __) => { if (radioRtf.Checked) OnFormatChanged(ExportFormat.Rtf); };
             radioTxt.CheckedChanged += (_, __) => { if (radioTxt.Checked) OnFormatChanged(ExportFormat.Txt); };
 
-            lvwBlocks.ItemChecked += (_, __) => UpdateExportButtonState();
-            lvwBlocks.ItemSelectionChanged += (_, __) => UpdateExportButtonState();
+            // Maintain checked set (fast)
+            lvwBlocks.ItemChecked += (_, e) =>
+            {
+                if (e.Item?.Tag is int idx)
+                {
+                    if (e.Item.Checked) _checked.Add(idx);
+                    else _checked.Remove(idx);
+                }
+                UpdateExportButtonState();
+            };
 
-            // Fill the list
-            PopulateBlocks();
+            // Hash on-demand when selection changes (no upfront hashing)
+            lvwBlocks.ItemSelectionChanged += async (_, e) =>
+            {
+                if (e.IsSelected && e.Item != null)
+                    await EnsureHashForListItemAsync(e.Item);
+            };
 
-            // Keep designer progress bar unused (status now in reporterDiag)
+            // Fill list fast
+            PopulateBlocksFast();
+
+            // Designer progress bar unused (we use reporterDiag)
             prgExport.Visible = false;
             prgExport.Minimum = 0;
             prgExport.Value = 0;
@@ -77,24 +102,25 @@ namespace HSTRYDoc
             _outputPath = string.Empty;
             txtOutput.Text = string.Empty;
 
-            if (_format == ExportFormat.Pdf)
-                grpOutput.Text = "Output file (PDF)";
-            else
-                grpOutput.Text = "Output folder";
+            grpOutput.Text = (_format == ExportFormat.Pdf)
+                ? "Output file (PDF)"
+                : "Output folder";
         }
 
-        private void PopulateBlocks()
+        // IMPORTANT: No hash computation here (prevents UI freeze on large containers)
+        private void PopulateBlocksFast()
         {
             lvwBlocks.BeginUpdate();
             try
             {
                 lvwBlocks.Items.Clear();
+                _checked.Clear();
 
                 for (int i = 0; i < _container.Blocks.Count; i++)
                 {
                     var b = _container.Blocks[i];
 
-                    string hashHex = Convert.ToHexString(_container.ComputeBlockHash(b));
+                    string hashHex = string.Empty; // computed on demand
                     string size = ByteFormat.ToHumanSize(b.StoredSizeBytes);
 
                     string created = b.CreatedUtc.ToLocalTime().ToString("dd.MM.yyyy HH:mm:ss:ffffff");
@@ -106,8 +132,8 @@ namespace HSTRYDoc
                     item.SubItems.Add(created);
                     item.SubItems.Add(changed);
 
-                    item.Tag = i;         // store block index
-                    item.Checked = false; // user chooses
+                    item.Tag = i;
+                    item.Checked = false;
 
                     lvwBlocks.Items.Add(item);
                 }
@@ -118,22 +144,45 @@ namespace HSTRYDoc
             }
         }
 
+        private async Task EnsureHashForListItemAsync(ListViewItem item)
+        {
+            if (item == null) return;
+            if (item.SubItems.Count < 2) return;
+
+            // Already computed?
+            if (!string.IsNullOrWhiteSpace(item.SubItems[1].Text)) return;
+
+            if (item.Tag is not int idx) return;
+            if (idx < 0 || idx >= _container.Blocks.Count) return;
+
+            item.SubItems[1].Text = "Computing…";
+
+            try
+            {
+                string hex = await Task.Run(() =>
+                {
+                    byte[] h = _container.ComputeBlockHash(_container.Blocks[idx]);
+                    return Convert.ToHexString(h);
+                });
+
+                item.SubItems[1].Text = hex;
+            }
+            catch
+            {
+                item.SubItems[1].Text = string.Empty;
+            }
+        }
+
         private List<int> GetCheckedBlockIndices()
         {
-            var indices = new List<int>();
-            foreach (ListViewItem it in lvwBlocks.Items)
-            {
-                if (it is null) continue;
-                if (!it.Checked) continue;
-                if (it.Tag is int idx) indices.Add(idx);
-            }
+            var indices = _checked.ToList();
             indices.Sort();
             return indices;
         }
 
         private void UpdateExportButtonState()
         {
-            bool hasSelection = GetCheckedBlockIndices().Count > 0;
+            bool hasSelection = _checked.Count > 0;
             bool hasOutput = !string.IsNullOrWhiteSpace(_outputPath);
 
             btnExport.Enabled = hasSelection && hasOutput;
@@ -178,17 +227,18 @@ namespace HSTRYDoc
             var indices = GetCheckedBlockIndices();
             if (indices.Count == 0)
             {
-                MessageBox.Show(this, "Please select at least one block.", "Export", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                MessageBox.Show(this, "Please select at least one block.", "Export",
+                    MessageBoxButtons.OK, MessageBoxIcon.Information);
                 return;
             }
 
             if (string.IsNullOrWhiteSpace(_outputPath))
             {
-                MessageBox.Show(this, "Please choose an output location first.", "Export", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                MessageBox.Show(this, "Please choose an output location first.", "Export",
+                    MessageBoxButtons.OK, MessageBoxIcon.Information);
                 return;
             }
 
-            // UI lock for this dialog (the reporterDiag will show progress)
             SetUiEnabled(false);
 
             try
@@ -201,32 +251,24 @@ namespace HSTRYDoc
                         progress.Report(new UiProgress
                         {
                             Message = "Preparing export…",
-                            Indeterminate = true
+                            Indeterminate = false,
+                            Maximum = indices.Count,
+                            Value = 0
                         });
 
-                        // Many WinForms components (RichTextBox/PrintDocument) behave best on STA.
+                        // RichTextBox/PrintDocument work best on STA to avoid hangs.
                         await StaTask.RunAsync(() =>
                         {
                             token.ThrowIfCancellationRequested();
-
-                            progress.Report(new UiProgress
-                            {
-                                Message = $"Exporting {indices.Count} block(s)…",
-                                Indeterminate = false,
-                                Maximum = indices.Count,
-                                Value = 0
-                            });
 
                             switch (_format)
                             {
                                 case ExportFormat.Pdf:
                                     ExportPdf(_outputPath, indices, progress, token);
                                     break;
-
                                 case ExportFormat.Rtf:
                                     ExportRtfFolder(_outputPath, indices, progress, token);
                                     break;
-
                                 case ExportFormat.Txt:
                                     ExportTxtFolder(_outputPath, indices, progress, token);
                                     break;
@@ -234,19 +276,22 @@ namespace HSTRYDoc
                         }, token);
                     });
 
-                MessageBox.Show(this, "Export completed successfully.", "Export", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                MessageBox.Show(this, "Export completed successfully.", "Export",
+                    MessageBoxButtons.OK, MessageBoxIcon.Information);
                 DialogResult = DialogResult.OK;
                 Close();
             }
             catch (OperationCanceledException)
             {
-                MessageBox.Show(this, "Export cancelled.", "Export", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                MessageBox.Show(this, "Export cancelled.", "Export",
+                    MessageBoxButtons.OK, MessageBoxIcon.Information);
                 SetUiEnabled(true);
                 UpdateExportButtonState();
             }
             catch (Exception ex)
             {
-                MessageBox.Show(this, ex.Message, "Export error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                MessageBox.Show(this, ex.Message, "Export error",
+                    MessageBoxButtons.OK, MessageBoxIcon.Error);
                 SetUiEnabled(true);
                 UpdateExportButtonState();
             }
@@ -272,17 +317,17 @@ namespace HSTRYDoc
         {
             Directory.CreateDirectory(folder);
 
-            int done = 0;
-            foreach (int i in indices)
+            for (int done = 0; done < indices.Count; done++)
             {
                 token.ThrowIfCancellationRequested();
 
+                int i = indices[done];
                 var b = _container.Blocks[i];
 
                 progress.Report(new UiProgress
                 {
                     Message = $"Exporting RTF {done + 1}/{indices.Count}: {b.Title}",
-                    Value = done,
+                    Value = done + 1,
                     Maximum = indices.Count,
                     Indeterminate = false
                 });
@@ -293,14 +338,11 @@ namespace HSTRYDoc
                 string path = Path.Combine(folder, safe + ".rtf");
 
                 File.WriteAllText(path, rtf, Encoding.UTF8);
-
-                done++;
-                progress.Report(new UiProgress { Value = done });
             }
         }
 
         // ----------------------------
-        // TXT export (multiple files) - uses RichTextBox on STA thread
+        // TXT export (multiple files)
         // ----------------------------
         private void ExportTxtFolder(string folder, List<int> indices, IProgress<UiProgress> progress, CancellationToken token)
         {
@@ -308,17 +350,17 @@ namespace HSTRYDoc
 
             using var rtb = new RichTextBox();
 
-            int done = 0;
-            foreach (int i in indices)
+            for (int done = 0; done < indices.Count; done++)
             {
                 token.ThrowIfCancellationRequested();
 
+                int i = indices[done];
                 var b = _container.Blocks[i];
 
                 progress.Report(new UiProgress
                 {
                     Message = $"Exporting TXT {done + 1}/{indices.Count}: {b.Title}",
-                    Value = done,
+                    Value = done + 1,
                     Maximum = indices.Count,
                     Indeterminate = false
                 });
@@ -332,9 +374,6 @@ namespace HSTRYDoc
                 string path = Path.Combine(folder, safe + ".txt");
 
                 File.WriteAllText(path, text, Encoding.UTF8);
-
-                done++;
-                progress.Report(new UiProgress { Value = done });
             }
         }
 
@@ -347,12 +386,10 @@ namespace HSTRYDoc
         {
             if (indices.Count == 0) return;
 
-            // Ensure target folder exists
             Directory.CreateDirectory(Path.GetDirectoryName(pdfPath) ?? Environment.CurrentDirectory);
 
             using var doc = new PrintDocument();
 
-            // Setup printer
             doc.PrinterSettings.PrinterName = "Microsoft Print to PDF";
             if (!doc.PrinterSettings.IsValid)
                 throw new InvalidOperationException("The 'Microsoft Print to PDF' printer is not available on this system.");
@@ -405,7 +442,7 @@ namespace HSTRYDoc
                     progress.Report(new UiProgress
                     {
                         Message = $"Exporting PDF {blockPos + 1}/{indices.Count}: {b.Title}",
-                        Value = blockPos,
+                        Value = blockPos + 1,
                         Maximum = indices.Count,
                         Indeterminate = false
                     });
@@ -415,24 +452,18 @@ namespace HSTRYDoc
                     loadedBlock = true;
                 }
 
-                // print current page chunk
                 charPos = RichTextBoxPrintHelper.FormatRange(rtb, e, charPos, rtb.TextLength);
 
                 if (charPos < rtb.TextLength)
                 {
-                    // more pages for same block
                     e.HasMorePages = true;
                     return;
                 }
 
-                // block finished -> progress increments once per block
                 blockPos++;
                 loadedBlock = false;
                 RichTextBoxPrintHelper.FormatRangeDone(rtb);
 
-                progress.Report(new UiProgress { Value = blockPos });
-
-                // force a new page if there is another block
                 e.HasMorePages = blockPos < indices.Count;
             };
 
@@ -451,9 +482,7 @@ namespace HSTRYDoc
             var sb = new StringBuilder(name.Length);
 
             foreach (char c in name)
-            {
                 sb.Append(invalid.Contains(c) ? '_' : c);
-            }
 
             string s = sb.ToString().Trim();
             if (s.Length > 120) s = s.Substring(0, 120);

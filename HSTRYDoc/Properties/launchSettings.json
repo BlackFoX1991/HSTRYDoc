@@ -1,0 +1,8 @@
+{
+  "profiles": {
+    "HSTRYDoc": {
+      "commandName": "Project",
+      "commandLineArgs": "--dev"
+    }
+  }
+}

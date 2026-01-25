@@ -10,6 +10,14 @@ namespace HSTRYDoc
         private HSTRYDoc.colorPicker? _colorPopup;
         private bool _suppressBlockSelectionChanged = false;
 
+        // ---- Hash compute (on-demand for large containers) ----
+        private CancellationTokenSource? _hashCts;
+
+
+        // Background hash filling for the block list
+        private CancellationTokenSource? _hashFillCts;
+
+
         private bool _updatingFontSizeUi = false;
         private bool _updatingParagraphUi = false;
 
@@ -721,7 +729,6 @@ namespace HSTRYDoc
         // ============================================================
         private async Task<bool> OpenContainerFromPathAsync(string path)
         {
-            // Always ask where to load keys from when opening a container
             if (!ResolvePrivateKeyInteractive(path, out string privPath))
                 return false;
 
@@ -738,10 +745,12 @@ namespace HSTRYDoc
                             Indeterminate = true
                         });
 
-                        // CPU/crypto-heavy: offload
                         HSTRYContainer loaded = await Task.Run(() => HSTRYContainer.LoadWithPrivateKeyFile(path, privPath), token);
                         return loaded;
                     });
+
+                // IMPORTANT: stop running hash jobs before switching container/list
+                CancelHashWorkers();
 
                 _container?.CloseKeyMaterial();
                 _container = c;
@@ -773,6 +782,7 @@ namespace HSTRYDoc
             }
         }
 
+
         // ============================================================
         // UI wiring
         // ============================================================
@@ -801,6 +811,13 @@ namespace HSTRYDoc
             // ListView selection
             lvwBlocks.SelectedIndexChanged += (_, __) => UiSelectBlockFromList();
             lvwBlocks.DoubleClick += (_, __) => UiSelectBlockFromList();
+            // Hash on-demand when selection changes (large containers)
+            lvwBlocks.ItemSelectionChanged += async (_, e) =>
+            {
+                if (e.IsSelected && e.Item != null)
+                    await EnsureHashForListItemAsync(e.Item);
+            };
+
 
             // RichTextBox context menu clipboard
             copyToolStripMenuItem1.Click += (_, __) => rtfMainText.Copy();
@@ -914,7 +931,6 @@ namespace HSTRYDoc
 
                 if (res == DialogResult.Yes)
                 {
-                    // avoid async in FormClosing: block explicitly
                     if (!UiSaveContainerBlocking())
                     {
                         e.Cancel = true;
@@ -928,6 +944,9 @@ namespace HSTRYDoc
 
             _acRebuildTimer.Stop();
             _rtfAutoComplete?.Dispose();
+
+            // IMPORTANT: stop background hash work before the form/control is disposed
+            CancelHashWorkers();
 
             _container?.CloseKeyMaterial();
         }
@@ -979,10 +998,12 @@ namespace HSTRYDoc
                                 encoding: Global.CurrentEditorEncoding);
 
                             c.Save(containerPath);
-
                             return c;
                         }, token);
                     });
+
+                // IMPORTANT: stop running hash jobs before switching container/list
+                CancelHashWorkers();
 
                 _container?.CloseKeyMaterial();
                 _container = created;
@@ -991,7 +1012,7 @@ namespace HSTRYDoc
                 _currentBlockIndex = -1;
                 _loadingBlockIntoEditor = false;
                 _blockDirty = false;
-                _containerDirty = false; // already saved
+                _containerDirty = false;
 
                 lvwBlocks.Items.Clear();
                 ClearEditor();
@@ -1149,7 +1170,6 @@ namespace HSTRYDoc
         {
             if (_container == null)
             {
-                // keep sync UX here: create is async
                 _ = Task.Run(async () =>
                 {
                     await Task.Yield();
@@ -1164,7 +1184,7 @@ namespace HSTRYDoc
 
             if (!MaybeCommitCurrentBlock()) return;
 
-            string title = _container!.GenerateUniqueTitle();
+            string title = _container.GenerateUniqueTitle();
             using (TextPromptDialog dlg = new("New block", "Block name:", title))
             {
                 if (dlg.ShowDialog(this) != DialogResult.OK) return;
@@ -1185,7 +1205,10 @@ namespace HSTRYDoc
 
             try
             {
-                Block b = _container!.AddRtfDocument(title, emptyRtf);
+                // Stop hashing before mutation + list rebuild
+                CancelHashWorkers();
+
+                Block b = _container.AddRtfDocument(title, emptyRtf);
                 _containerDirty = true;
 
                 RefreshBlockList(selectIndex: b.Index);
@@ -1214,6 +1237,9 @@ namespace HSTRYDoc
 
             try
             {
+                // Stop hashing before mutation + list rebuild
+                CancelHashWorkers();
+
                 _container.RenameBlock(idx, dlg.InputText);
                 _containerDirty = true;
 
@@ -1228,6 +1254,7 @@ namespace HSTRYDoc
                 MessageBox.Show(this, ex.Message, "Rename block", MessageBoxButtons.OK, MessageBoxIcon.Error);
             }
         }
+
 
         private void UiRemoveBlock()
         {
@@ -1252,6 +1279,9 @@ namespace HSTRYDoc
 
             try
             {
+                // Stop hashing before removal (indices shift) + list rebuild
+                CancelHashWorkers();
+
                 _container.RemoveBlock(idx);
                 _containerDirty = true;
 
@@ -1361,6 +1391,9 @@ namespace HSTRYDoc
 
             try
             {
+                // Stop hashing before heavy update/re-encrypt and list rebuild
+                CancelHashWorkers();
+
                 _container.UpdateRtfDocument(_currentBlockIndex, rtfMainText.Rtf ?? string.Empty);
                 _blockDirty = false;
                 _containerDirty = true;
@@ -1400,6 +1433,9 @@ namespace HSTRYDoc
 
             try
             {
+                // Stop hashing before heavy update/re-encrypt and list rebuild
+                CancelHashWorkers();
+
                 _container.UpdateRtfDocument(_currentBlockIndex, rtfMainText.Rtf ?? string.Empty);
                 _blockDirty = false;
                 _containerDirty = true;
@@ -1422,6 +1458,12 @@ namespace HSTRYDoc
                 return;
             }
 
+            // IMPORTANT: stop any running hash jobs before rebuilding the list
+            CancelHashWorkers();
+
+            int total = _container.Blocks.Count;
+            bool computeSync = total <= 500;
+
             lvwBlocks.BeginUpdate();
             try
             {
@@ -1429,14 +1471,17 @@ namespace HSTRYDoc
 
                 foreach (Block b in _container.Blocks)
                 {
-                    string hashHex = Convert.ToHexString(_container.ComputeBlockHash(b));
+                    string hashText = computeSync
+                        ? Convert.ToHexString(_container.ComputeBlockHash(b))
+                        : "Computing…";
+
                     string size = ByteFormat.ToHumanSize(b.StoredSizeBytes);
 
                     string created = b.CreatedUtc.ToLocalTime().ToString("dd.MM.yyyy HH:mm:ss:ffffff");
                     string changed = b.ModifiedUtc.ToLocalTime().ToString("dd.MM.yyyy HH:mm:ss:ffffff");
 
                     ListViewItem item = new(b.Title);
-                    item.SubItems.Add(hashHex);
+                    item.SubItems.Add(hashText);
                     item.SubItems.Add(size);
                     item.SubItems.Add(created);
                     item.SubItems.Add(changed);
@@ -1454,7 +1499,132 @@ namespace HSTRYDoc
 
             if (selectIndex.HasValue)
                 SelectListIndex(selectIndex.Value);
+
+            if (!computeSync && total > 0)
+                StartHashFillAsync();
         }
+
+
+        private void StartHashFillAsync()
+        {
+            if (_container == null) return;
+            if (lvwBlocks.IsDisposed) return;
+
+            _hashFillCts?.Cancel();
+            _hashFillCts?.Dispose();
+            _hashFillCts = new CancellationTokenSource();
+
+            CancellationToken token = _hashFillCts.Token;
+
+            int count = _container.Blocks.Count;
+
+            _ = Task.Run(() =>
+            {
+                const int batchSize = 25;
+                var batch = new List<(int index, string hex)>(batchSize);
+
+                for (int i = 0; i < count; i++)
+                {
+                    token.ThrowIfCancellationRequested();
+
+                    string hex = Convert.ToHexString(_container!.ComputeBlockHash(_container.Blocks[i]));
+                    batch.Add((i, hex));
+
+                    if (batch.Count >= batchSize)
+                    {
+                        // IMPORTANT: snapshot copy to avoid "Collection was modified"
+                        var snapshot = batch.ToArray();
+                        PostBatchToUi(snapshot);
+                        batch.Clear();
+                    }
+                }
+
+                if (batch.Count > 0)
+                {
+                    var snapshot = batch.ToArray();
+                    PostBatchToUi(snapshot);
+                }
+
+            }, token);
+
+            void PostBatchToUi((int index, string hex)[] updates)
+            {
+                if (token.IsCancellationRequested) return;
+                if (IsDisposed) return;
+
+                try
+                {
+                    BeginInvoke(new Action(() =>
+                    {
+                        if (token.IsCancellationRequested) return;
+                        if (_container == null) return;
+                        if (lvwBlocks.IsDisposed) return;
+
+                        int itemCount = lvwBlocks.Items.Count;
+
+                        for (int k = 0; k < updates.Length; k++)
+                        {
+                            int idx = updates[k].index;
+                            string hex = updates[k].hex;
+
+                            if (idx < 0 || idx >= itemCount) continue;
+
+                            var it = lvwBlocks.Items[idx];
+                            if (it.SubItems.Count < 2) continue;
+
+                            if (it.SubItems[1].Text == "Computing…" || string.IsNullOrWhiteSpace(it.SubItems[1].Text))
+                                it.SubItems[1].Text = hex;
+                        }
+                    }));
+                }
+                catch
+                {
+                    // Ignore UI race (form closing etc.)
+                }
+            }
+        }
+
+        private async Task EnsureHashForListItemAsync(ListViewItem item)
+        {
+            if (_container == null) return;
+            if (item == null) return;
+
+            // Hash column index 1 (Name is 0)
+            if (item.SubItems.Count < 2) return;
+
+            // Already computed?
+            if (!string.IsNullOrWhiteSpace(item.SubItems[1].Text)) return;
+
+            if (item.Tag is not int idx) return;
+            if (idx < 0 || idx >= _container.Blocks.Count) return;
+
+            // Cancel previous ongoing hash
+            _hashCts?.Cancel();
+            _hashCts?.Dispose();
+            _hashCts = new CancellationTokenSource();
+            var token = _hashCts.Token;
+
+            item.SubItems[1].Text = "Computing…";
+
+            try
+            {
+                string hex = await Task.Run(() =>
+                {
+                    token.ThrowIfCancellationRequested();
+                    byte[] h = _container.ComputeBlockHash(_container.Blocks[idx]);
+                    return Convert.ToHexString(h);
+                }, token);
+
+                if (!token.IsCancellationRequested)
+                    item.SubItems[1].Text = hex;
+            }
+            catch
+            {
+                if (!token.IsCancellationRequested)
+                    item.SubItems[1].Text = string.Empty;
+            }
+        }
+
 
         private int GetSelectedBlockIndex()
         {
@@ -2707,6 +2877,20 @@ namespace HSTRYDoc
         {
             ToggleNumericBullets();
         }
+
+        private void CancelHashWorkers()
+        {
+            // Cancel on-demand hash calculation (selection-based)
+            _hashCts?.Cancel();
+            _hashCts?.Dispose();
+            _hashCts = null;
+
+            // Cancel background list-hash filling
+            _hashFillCts?.Cancel();
+            _hashFillCts?.Dispose();
+            _hashFillCts = null;
+        }
+
 
         private void ToggleNumericBullets(ushort startAt = 1)
         {
