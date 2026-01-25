@@ -1,24 +1,7 @@
-// hsMain.cs (FULL, inline)
-// - Chooser is shown on startup if no valid "Open with..." file was loaded
-// - NO automatic creation of a new container on startup
-// - ALL user-facing texts/messages are English
-// - Persists Main window placement (WindowState + Position + Size) via AppState
-// - Shows recent files (max 20) in Chooser.lvwRecent via AppState
-// - Table context menu operations (add/remove row/column) based on caret position; table menu hidden if not in table
-// - Auto-completion: dynamic suggestions from words already present in rtfMainText (debounced rebuild)
-// - V2-only containers: Open/Create uses private key file (*.hstrypriv). No password-based (v1) support.
-// - Default keys are stored in "Security_Keys" under app directory (fallback to LocalAppData when app dir is not writable)
-
-using System;
-using System.ComponentModel;
 using System.Globalization;
-using System.IO;
-using System.Linq;
-using System.Collections.Generic;
-using System.Drawing;
-using System.Text;
-using System.Windows.Forms;
 using System.Runtime.InteropServices;
+using System.Security.Cryptography;
+using System.Text;
 
 namespace HSTRYDoc
 {
@@ -62,9 +45,223 @@ namespace HSTRYDoc
         public hsMain()
         {
             InitializeComponent();
+            if (Global.Testmode)
+            {
+                this.toolStripSeparator5.Visible = true;
+                this.btnTestblocks.Visible = true;
+            }
+
         }
 
-        private void hsMain_Load(object sender, EventArgs e)
+        #region test_blocks
+
+        // ...
+
+        private async Task CreateTestBlocksAsync(int count, int minWordsPerBlock = 80, int maxWordsPerBlock = 250)
+        {
+            if (count <= 0) return;
+
+            if (_container == null)
+            {
+                MessageBox.Show(this, "No container is currently open.", "Test blocks",
+                    MessageBoxButtons.OK, MessageBoxIcon.Information);
+                return;
+            }
+
+            if (!MaybeCommitCurrentBlock())
+                return;
+
+            // Keep range sane
+            if (minWordsPerBlock < 1) minWordsPerBlock = 1;
+            if (maxWordsPerBlock < minWordsPerBlock) maxWordsPerBlock = minWordsPerBlock;
+
+            try
+            {
+                // Optional: progress dialog (works with the reporterDiag you already have)
+                await reporterDiag.RunAsync(
+                    owner: this,
+                    title: "Creating test blocks",
+                    work: async (progress, token) =>
+                    {
+                        progress.Report(new UiProgress
+                        {
+                            Message = "Preparing…",
+                            Indeterminate = false,
+                            Maximum = count,
+                            Value = 0
+                        });
+
+                        await Task.Run(() =>
+                        {
+                            // Pre-generate dictionary words once (fast + stable)
+                            string[] words = BuildWordPool();
+
+                            for (int i = 0; i < count; i++)
+                            {
+                                token.ThrowIfCancellationRequested();
+
+                                // Unique title (no duplicates)
+                                string title = _container!.GenerateUniqueTitle();
+
+                                // Build random text
+                                int wCount = RandomNumberGenerator.GetInt32(minWordsPerBlock, maxWordsPerBlock + 1);
+                                string plain = BuildRandomParagraphs(words, wCount);
+
+                                // Wrap as RTF (minimal formatting; safe escaping)
+                                string rtf = BuildSimpleRtf(title, plain);
+
+                                _container!.AddRtfDocument(title, rtf);
+
+                                progress.Report(new UiProgress
+                                {
+                                    Message = $"Created block {i + 1}/{count}",
+                                    Value = i + 1
+                                });
+                            }
+                        }, token);
+                    });
+
+                _containerDirty = true;
+                RefreshBlockList(selectIndex: _container.Blocks.Count - 1);
+                LoadBlockIntoEditor(_container.Blocks.Count - 1);
+                UpdateUiState();
+
+                MessageBox.Show(this, $"Created {count} test block(s).", "Test blocks",
+                    MessageBoxButtons.OK, MessageBoxIcon.Information);
+            }
+            catch (OperationCanceledException)
+            {
+                MessageBox.Show(this, "Operation cancelled.", "Test blocks",
+                    MessageBoxButtons.OK, MessageBoxIcon.Information);
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show(this, ex.Message, "Test blocks",
+                    MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
+        }
+
+        private static string[] BuildWordPool()
+        {
+            // Mix of generic words; feel free to expand
+            return new[]
+            {
+        "alpha","beta","gamma","delta","epsilon","zeta","eta","theta","iota","kappa",
+        "document","container","block","editor","format","title","content","random","test","sample",
+        "encryption","signature","header","recipient","private","public","hash","nonce","cipher","tag",
+        "method","class","function","variable","string","integer","boolean","object","thread","async",
+        "update","save","open","close","search","index","value","progress","status","dialog",
+        "system","design","performance","memory","validation","integrity","version","encoding","unicode",
+        "note","section","paragraph","line","word","sentence","example","dummy","placeholder","draft"
+    };
+        }
+
+        private static string BuildRandomParagraphs(string[] words, int wordCount)
+        {
+            // Create 2–6 paragraphs depending on size
+            int paraCount = Math.Clamp(wordCount / 60, 2, 6);
+
+            int remaining = wordCount;
+            StringBuilder sb = new(wordCount * 6);
+
+            for (int p = 0; p < paraCount; p++)
+            {
+                int thisPara = (p == paraCount - 1)
+                    ? remaining
+                    : Math.Max(10, remaining / (paraCount - p));
+
+                remaining -= thisPara;
+
+                sb.Append(BuildRandomSentences(words, thisPara));
+                if (p < paraCount - 1)
+                    sb.Append("\n\n");
+            }
+
+            return sb.ToString();
+        }
+
+        private static string BuildRandomSentences(string[] words, int wordCount)
+        {
+            StringBuilder sb = new(wordCount * 6);
+
+            int remaining = wordCount;
+
+            while (remaining > 0)
+            {
+                // sentence length 8..18 words
+                int sLen = Math.Min(remaining, RandomNumberGenerator.GetInt32(8, 19));
+                remaining -= sLen;
+
+                for (int i = 0; i < sLen; i++)
+                {
+                    string w = words[RandomNumberGenerator.GetInt32(0, words.Length)];
+
+                    if (i == 0)
+                        w = char.ToUpperInvariant(w[0]) + w.Substring(1);
+
+                    sb.Append(w);
+
+                    if (i < sLen - 1)
+                        sb.Append(' ');
+                }
+
+                sb.Append(". ");
+            }
+
+            return sb.ToString().Trim();
+        }
+
+        private static string BuildSimpleRtf(string title, string plainText)
+        {
+            // Minimal RTF (Arial 10). Convert newlines to \par, escape RTF special chars.
+            string Esc(string s) => EscapeRtf(s);
+
+            string body = Esc(plainText).Replace("\r\n", "\n").Replace("\r", "\n").Replace("\n\n", @"\par\par ")
+                                        .Replace("\n", @"\par ");
+
+            return @"{\rtf1\ansi\deff0" +
+                   @"{\fonttbl{\f0 Arial;}}" +
+                   @"\fs20 " +
+                   @"\b " + Esc(title) + @"\b0\par\par " +
+                   body +
+                   @"}";
+        }
+
+        private static string EscapeRtf(string s)
+        {
+            if (string.IsNullOrEmpty(s)) return string.Empty;
+
+            StringBuilder sb = new(s.Length + 16);
+            foreach (char c in s)
+            {
+                switch (c)
+                {
+                    case '\\': sb.Append(@"\\"); break;
+                    case '{': sb.Append(@"\{"); break;
+                    case '}': sb.Append(@"\}"); break;
+                    default:
+                        if (c <= 0x7f)
+                        {
+                            sb.Append(c);
+                        }
+                        else
+                        {
+                            // RTF unicode escape
+                            sb.Append(@"\u");
+                            sb.Append((short)c);
+                            sb.Append('?');
+                        }
+                        break;
+                }
+            }
+            return sb.ToString();
+        }
+
+
+
+        #endregion
+
+        private async void hsMain_Load(object sender, EventArgs e)
         {
             ApplySavedWindowPlacement();
 
@@ -74,9 +271,9 @@ namespace HSTRYDoc
             EnsureDefaultKeyPair();
 
             // Startup: "Open with..." OR show Chooser (do NOT auto-create)
-            if (!TryOpenFromCommandLineOrShell())
+            if (!await TryOpenFromCommandLineOrShellAsync())
             {
-                if (!RunChooserStartup())
+                if (!await RunChooserStartupAsync())
                 {
                     Close();
                     return;
@@ -143,7 +340,7 @@ namespace HSTRYDoc
                     return;
                 }
 
-                using var rsa = HSTRYContainer.RsaKeyFiles.CreateNewKeyPair(3072);
+                using RSA rsa = HSTRYContainer.RsaKeyFiles.CreateNewKeyPair(3072);
                 HSTRYContainer.RsaKeyFiles.SavePrivateKeyPkcs8(priv, rsa);
                 HSTRYContainer.RsaKeyFiles.SavePublicKeySpki(pub, rsa);
 
@@ -191,7 +388,7 @@ namespace HSTRYDoc
             }
 
             // 4) ask user
-            using var ofd = new OpenFileDialog
+            using OpenFileDialog ofd = new()
             {
                 Filter = "HSTRY Private Key (*.hstrypriv)|*.hstrypriv|All files (*.*)|*.*",
                 CheckFileExists = true,
@@ -207,7 +404,7 @@ namespace HSTRYDoc
         }
 
         // ============================================================
-        // NEW: Interactive key selection dialog (Default vs USB(HSTRY_KEY) vs Manual)
+        // Interactive key selection dialog (Default vs USB(HSTRY_KEY) vs Manual)
         // ============================================================
         private bool ResolvePrivateKeyInteractive(string containerPath, out string privateKeyPath)
         {
@@ -218,7 +415,7 @@ namespace HSTRYDoc
 
             string defaultKey = GetDefaultOwnerPrivateKeyPath();
 
-            using var dlg = new KeySourceDialog(defaultKey)
+            using KeySourceDialog dlg = new(defaultKey)
             {
                 StartPosition = FormStartPosition.CenterParent
             };
@@ -288,7 +485,7 @@ namespace HSTRYDoc
                 return;
             }
 
-            var words = ExtractWords(text, minLen: 3, maxUniqueWords: 5000, maxReturned: 2000);
+            HashSet<string> words = ExtractWords(text, minLen: 3, maxUniqueWords: 5000, maxReturned: 2000);
 
             if (SetsEqual(words, _acLastWords))
                 return;
@@ -299,7 +496,7 @@ namespace HSTRYDoc
 
         private static HashSet<string> ExtractWords(string text, int minLen, int maxUniqueWords, int maxReturned)
         {
-            var counts = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+            Dictionary<string, int> counts = new(StringComparer.OrdinalIgnoreCase);
 
             int i = 0;
             while (i < text.Length)
@@ -356,7 +553,7 @@ namespace HSTRYDoc
         private static bool SetsEqual(HashSet<string> a, HashSet<string> b)
         {
             if (a.Count != b.Count) return false;
-            foreach (var x in a)
+            foreach (string x in a)
                 if (!b.Contains(x)) return false;
             return true;
         }
@@ -366,7 +563,7 @@ namespace HSTRYDoc
         // ============================================================
         private void ApplySavedWindowPlacement()
         {
-            var wp = _appState.MainWindow;
+            WindowPlacement wp = _appState.MainWindow;
             if (wp == null) return;
 
             if (wp.Width > 100 && wp.Height > 100 &&
@@ -374,8 +571,8 @@ namespace HSTRYDoc
             {
                 StartPosition = FormStartPosition.Manual;
 
-                var desired = new Rectangle(wp.X, wp.Y, wp.Width, wp.Height);
-                var wa = Screen.FromRectangle(desired).WorkingArea;
+                Rectangle desired = new(wp.X, wp.Y, wp.Width, wp.Height);
+                Rectangle wa = Screen.FromRectangle(desired).WorkingArea;
 
                 int x = desired.X;
                 int y = desired.Y;
@@ -394,7 +591,7 @@ namespace HSTRYDoc
                 Bounds = new Rectangle(x, y, w, h);
             }
 
-            var state = (FormWindowState)wp.WindowState;
+            FormWindowState state = (FormWindowState)wp.WindowState;
             if (state == FormWindowState.Minimized)
                 state = FormWindowState.Normal;
 
@@ -403,7 +600,7 @@ namespace HSTRYDoc
 
         private void SaveWindowPlacement()
         {
-            var wp = _appState.MainWindow ??= new WindowPlacement();
+            WindowPlacement wp = _appState.MainWindow ??= new WindowPlacement();
 
             Rectangle r = (WindowState == FormWindowState.Normal) ? Bounds : RestoreBounds;
 
@@ -415,27 +612,27 @@ namespace HSTRYDoc
         }
 
         // ============================================================
-        // Chooser Startup
+        // Chooser Startup (ASYNC)
         // ============================================================
-        private bool RunChooserStartup()
+        private async Task<bool> RunChooserStartupAsync()
         {
             while (_container == null)
             {
-                using var chooser = new Chooser
+                using Chooser chooser = new()
                 {
                     StartPosition = FormStartPosition.CenterParent
                 };
 
                 chooser.SetRecent(_appState.GetRecentExisting());
 
-                var dr = chooser.ShowDialog(this);
+                DialogResult dr = chooser.ShowDialog(this);
 
                 if (dr == DialogResult.Cancel)
                     return false;
 
                 if (dr == DialogResult.Yes)
                 {
-                    if (UiCreateNewContainer(initialStartup: true))
+                    if (await UiCreateNewContainerAsync(initialStartup: true))
                         return true;
 
                     continue;
@@ -459,13 +656,13 @@ namespace HSTRYDoc
                             continue;
                         }
 
-                        if (OpenContainerFromPath(p))
+                        if (await OpenContainerFromPathAsync(p))
                             return true;
 
                         continue;
                     }
 
-                    if (TryOpenContainerInteractive())
+                    if (await TryOpenContainerInteractiveAsync())
                         return true;
 
                     continue;
@@ -478,9 +675,9 @@ namespace HSTRYDoc
         }
 
         // ============================================================
-        // Startup Open-With
+        // Startup Open-With (ASYNC)
         // ============================================================
-        private bool TryOpenFromCommandLineOrShell()
+        private async Task<bool> TryOpenFromCommandLineOrShellAsync()
         {
             try
             {
@@ -492,7 +689,7 @@ namespace HSTRYDoc
 
                 if (!LooksLikeHstryFile(path)) return false;
 
-                return OpenContainerFromPath(path);
+                return await OpenContainerFromPathAsync(path);
             }
             catch
             {
@@ -504,7 +701,7 @@ namespace HSTRYDoc
         {
             try
             {
-                using var fs = File.OpenRead(path);
+                using FileStream fs = File.OpenRead(path);
                 if (fs.Length < Global.FileMagic.Length) return false;
 
                 byte[] buf = new byte[Global.FileMagic.Length];
@@ -520,17 +717,31 @@ namespace HSTRYDoc
         }
 
         // ============================================================
-        // V2-only open (private key file)  [UPDATED: uses KeySourceDialog]
+        // V2-only open (private key file)  [UPDATED: uses KeySourceDialog] (ASYNC)
         // ============================================================
-        private bool OpenContainerFromPath(string path)
+        private async Task<bool> OpenContainerFromPathAsync(string path)
         {
-            // NEW behavior: always ask where to load keys from when opening a container
+            // Always ask where to load keys from when opening a container
             if (!ResolvePrivateKeyInteractive(path, out string privPath))
                 return false;
 
             try
             {
-                var c = HSTRYContainer.LoadWithPrivateKeyFile(path, privPath);
+                HSTRYContainer c = await reporterDiag.RunAsync(
+                    owner: this,
+                    title: "Opening container",
+                    work: async (progress, token) =>
+                    {
+                        progress.Report(new UiProgress
+                        {
+                            Message = "Opening container…",
+                            Indeterminate = true
+                        });
+
+                        // CPU/crypto-heavy: offload
+                        HSTRYContainer loaded = await Task.Run(() => HSTRYContainer.LoadWithPrivateKeyFile(path, privPath), token);
+                        return loaded;
+                    });
 
                 _container?.CloseKeyMaterial();
                 _container = c;
@@ -551,6 +762,10 @@ namespace HSTRYDoc
                 RebuildAutoCompleteWordsFromEditor();
                 return true;
             }
+            catch (OperationCanceledException)
+            {
+                return false;
+            }
             catch (Exception ex)
             {
                 MessageBox.Show(this, ex.Message, "Open container", MessageBoxButtons.OK, MessageBoxIcon.Error);
@@ -565,18 +780,18 @@ namespace HSTRYDoc
         {
             // Top Toolstrip
             newBlockToolStripButton.Click += (_, __) => UiNewBlock();
-            openContainerToolStripButton.Click += (_, __) => UiOpenContainer();
-            saveContainerToolStripButton.Click += (_, __) => UiSaveContainer();
+            openContainerToolStripButton.Click += async (_, __) => await UiOpenContainerAsync();
+            saveContainerToolStripButton.Click += async (_, __) => await UiSaveContainerAsync();
 
             // File Menu
             newToolStripMenuItem.Click += (_, __) => UiNewBlock();
-            openContainerToolStripMenuItem.Click += (_, __) => UiOpenContainer();
-            saveContainerToolStripMenuItem.Click += (_, __) => UiSaveContainer();
-            saveContainerAsToolStripMenuItem.Click += (_, __) => UiSaveContainerAs();
+            openContainerToolStripMenuItem.Click += async (_, __) => await UiOpenContainerAsync();
+            saveContainerToolStripMenuItem.Click += async (_, __) => await UiSaveContainerAsync();
+            saveContainerAsToolStripMenuItem.Click += async (_, __) => await UiSaveContainerAsAsync();
 
             // Tools Menu: Search
             searchInBlockToolStripMenuItem.Click += (_, __) => UiSearchInBlock();
-            searchInContainerToolStripMenuItem.Click += (_, __) => UiSearchInContainer();
+            searchInContainerToolStripMenuItem.Click += async (_, __) => await UiSearchInContainerAsync();
 
             // Blocks context menu
             newBlockToolStripMenuItem.Click += (_, __) => UiNewBlock();
@@ -684,7 +899,7 @@ namespace HSTRYDoc
 
             if (_containerDirty)
             {
-                var res = MessageBox.Show(
+                DialogResult res = MessageBox.Show(
                     this,
                     "The container has unsaved changes. Save now?",
                     Global.AppName,
@@ -699,7 +914,8 @@ namespace HSTRYDoc
 
                 if (res == DialogResult.Yes)
                 {
-                    if (!UiSaveContainer())
+                    // avoid async in FormClosing: block explicitly
+                    if (!UiSaveContainerBlocking())
                     {
                         e.Cancel = true;
                         return;
@@ -717,9 +933,9 @@ namespace HSTRYDoc
         }
 
         // ============================================================
-        // Container operations (V2-only create/open/save)
+        // Container operations (V2-only create/open/save) (ASYNC)
         // ============================================================
-        private bool UiCreateNewContainer(bool initialStartup = false)
+        private async Task<bool> UiCreateNewContainerAsync(bool initialStartup = false)
         {
             EnsureDefaultKeyPair();
 
@@ -730,7 +946,7 @@ namespace HSTRYDoc
                 return false;
             }
 
-            using var sfd = new SaveFileDialog
+            using SaveFileDialog sfd = new()
             {
                 Filter = "HSTRY Container (*.hstry)|*.hstry|All files (*.*)|*.*",
                 DefaultExt = "hstry",
@@ -746,27 +962,39 @@ namespace HSTRYDoc
 
             try
             {
-                using var ownerPriv = HSTRYContainer.RsaKeyFiles.LoadPrivateKeyPkcs8(_privateKeyPath);
+                HSTRYContainer created = await reporterDiag.RunAsync(
+                    owner: this,
+                    title: "Create container",
+                    work: async (progress, token) =>
+                    {
+                        progress.Report(new UiProgress { Message = "Creating container…", Indeterminate = true });
+
+                        return await Task.Run(() =>
+                        {
+                            using RSA ownerPriv = HSTRYContainer.RsaKeyFiles.LoadPrivateKeyPkcs8(_privateKeyPath);
+
+                            HSTRYContainer c = HSTRYContainer.CreateNewForRecipients(
+                                ownerPrivateKey: ownerPriv,
+                                recipientPublicKeys: new[] { ownerPriv },
+                                encoding: Global.CurrentEditorEncoding);
+
+                            c.Save(containerPath);
+
+                            return c;
+                        }, token);
+                    });
 
                 _container?.CloseKeyMaterial();
-                _container = HSTRYContainer.CreateNewForRecipients(
-                    ownerPrivateKey: ownerPriv,
-                    recipientPublicKeys: new[] { ownerPriv },
-                    encoding: Global.CurrentEditorEncoding);
-
+                _container = created;
                 _containerPath = containerPath;
 
                 _currentBlockIndex = -1;
                 _loadingBlockIntoEditor = false;
                 _blockDirty = false;
-                _containerDirty = true;
+                _containerDirty = false; // already saved
 
                 lvwBlocks.Items.Clear();
                 ClearEditor();
-                UpdateUiState();
-
-                _container.Save(_containerPath);
-                _containerDirty = false;
                 UpdateUiState();
 
                 _appState.TouchRecentFile(_containerPath);
@@ -775,6 +1003,10 @@ namespace HSTRYDoc
                 RebuildAutoCompleteWordsFromEditor();
                 return true;
             }
+            catch (OperationCanceledException)
+            {
+                return false;
+            }
             catch (Exception ex)
             {
                 MessageBox.Show(this, ex.Message, "Create container", MessageBoxButtons.OK, MessageBoxIcon.Error);
@@ -782,13 +1014,13 @@ namespace HSTRYDoc
             }
         }
 
-        private bool TryOpenContainerInteractive()
+        private async Task<bool> TryOpenContainerInteractiveAsync()
         {
             if (!MaybeCommitCurrentBlock()) return false;
 
             if (_containerDirty)
             {
-                var res = MessageBox.Show(
+                DialogResult res = MessageBox.Show(
                     this,
                     "The container has unsaved changes. Continue without saving?",
                     "Open container",
@@ -798,7 +1030,7 @@ namespace HSTRYDoc
                 if (res != DialogResult.Yes) return false;
             }
 
-            using var ofd = new OpenFileDialog
+            using OpenFileDialog ofd = new()
             {
                 Filter = "HSTRY Container (*.hstry)|*.hstry|All files (*.*)|*.*",
                 CheckFileExists = true
@@ -813,25 +1045,39 @@ namespace HSTRYDoc
                 return false;
             }
 
-            return OpenContainerFromPath(ofd.FileName);
+            return await OpenContainerFromPathAsync(ofd.FileName);
         }
 
-        private void UiOpenContainer() => _ = TryOpenContainerInteractive();
+        private async Task UiOpenContainerAsync() => _ = await TryOpenContainerInteractiveAsync();
 
-        private bool UiSaveContainer()
+        private async Task<bool> UiSaveContainerAsync()
         {
             if (_container == null) return false;
             if (!MaybeCommitCurrentBlock()) return false;
 
             if (string.IsNullOrWhiteSpace(_containerPath))
-                return UiSaveContainerAs();
+                return await UiSaveContainerAsAsync();
 
             try
             {
-                _container.Save(_containerPath!);
+                await reporterDiag.RunAsync<object>(
+                    owner: this,
+                    title: "Save container",
+                    work: async (progress, token) =>
+                    {
+                        progress.Report(new UiProgress { Message = "Saving container…", Indeterminate = true });
+
+                        await Task.Run(() => _container.Save(_containerPath!), token);
+                        return new object();
+                    });
+
                 _containerDirty = false;
                 UpdateUiState();
                 return true;
+            }
+            catch (OperationCanceledException)
+            {
+                return false;
             }
             catch (Exception ex)
             {
@@ -840,12 +1086,18 @@ namespace HSTRYDoc
             }
         }
 
-        private bool UiSaveContainerAs()
+        private bool UiSaveContainerBlocking()
+        {
+            // used only in FormClosing (no async)
+            return UiSaveContainerAsync().GetAwaiter().GetResult();
+        }
+
+        private async Task<bool> UiSaveContainerAsAsync()
         {
             if (_container == null) return false;
             if (!MaybeCommitCurrentBlock()) return false;
 
-            using var sfd = new SaveFileDialog
+            using SaveFileDialog sfd = new()
             {
                 Filter = "HSTRY Container (*.hstry)|*.hstry|All files (*.*)|*.*",
                 DefaultExt = "hstry",
@@ -857,8 +1109,20 @@ namespace HSTRYDoc
 
             try
             {
-                _container.Save(sfd.FileName);
-                _containerPath = sfd.FileName;
+                string target = sfd.FileName;
+
+                await reporterDiag.RunAsync<object>(
+                    owner: this,
+                    title: "Save container as",
+                    work: async (progress, token) =>
+                    {
+                        progress.Report(new UiProgress { Message = "Saving container…", Indeterminate = true });
+
+                        await Task.Run(() => _container.Save(target), token);
+                        return new object();
+                    });
+
+                _containerPath = target;
                 _containerDirty = false;
                 UpdateUiState();
 
@@ -866,6 +1130,10 @@ namespace HSTRYDoc
                 _appState.Save();
 
                 return true;
+            }
+            catch (OperationCanceledException)
+            {
+                return false;
             }
             catch (Exception ex)
             {
@@ -881,13 +1149,23 @@ namespace HSTRYDoc
         {
             if (_container == null)
             {
-                if (!UiCreateNewContainer()) return;
+                // keep sync UX here: create is async
+                _ = Task.Run(async () =>
+                {
+                    await Task.Yield();
+                    BeginInvoke(new Action(async () =>
+                    {
+                        if (!await UiCreateNewContainerAsync()) return;
+                        UiNewBlock();
+                    }));
+                });
+                return;
             }
 
             if (!MaybeCommitCurrentBlock()) return;
 
             string title = _container!.GenerateUniqueTitle();
-            using (var dlg = new TextPromptDialog("New block", "Block name:", title))
+            using (TextPromptDialog dlg = new("New block", "Block name:", title))
             {
                 if (dlg.ShowDialog(this) != DialogResult.OK) return;
                 title = dlg.InputText;
@@ -907,7 +1185,7 @@ namespace HSTRYDoc
 
             try
             {
-                var b = _container!.AddRtfDocument(title, emptyRtf);
+                Block b = _container!.AddRtfDocument(title, emptyRtf);
                 _containerDirty = true;
 
                 RefreshBlockList(selectIndex: b.Index);
@@ -929,9 +1207,9 @@ namespace HSTRYDoc
 
             if (!MaybeCommitCurrentBlock()) return;
 
-            var b = _container.Blocks[idx];
+            Block b = _container.Blocks[idx];
 
-            using var dlg = new TextPromptDialog("Rename block", "New name:", b.Title);
+            using TextPromptDialog dlg = new("Rename block", "New name:", b.Title);
             if (dlg.ShowDialog(this) != DialogResult.OK) return;
 
             try
@@ -960,9 +1238,9 @@ namespace HSTRYDoc
 
             if (!MaybeCommitCurrentBlock()) return;
 
-            var b = _container.Blocks[idx];
+            Block b = _container.Blocks[idx];
 
-            var result = MessageBox.Show(
+            DialogResult result = MessageBox.Show(
                 this,
                 $"Do you really want to delete this block?\n\n{b.Title}",
                 "Delete Block",
@@ -1065,7 +1343,7 @@ namespace HSTRYDoc
             if (_currentBlockIndex < 0) return true;
             if (!_blockDirty) return true;
 
-            var res = MessageBox.Show(
+            DialogResult res = MessageBox.Show(
                 this,
                 "The current block has been modified. Apply changes?",
                 Global.AppName,
@@ -1103,7 +1381,7 @@ namespace HSTRYDoc
             if (_currentBlockIndex < 0) return true;
             if (!_blockDirty) return true;
 
-            var res = MessageBox.Show(
+            DialogResult res = MessageBox.Show(
                 this,
                 "This block has unsaved changes. Save changes before switching blocks?",
                 "Unsaved Changes",
@@ -1149,7 +1427,7 @@ namespace HSTRYDoc
             {
                 lvwBlocks.Items.Clear();
 
-                foreach (var b in _container.Blocks)
+                foreach (Block b in _container.Blocks)
                 {
                     string hashHex = Convert.ToHexString(_container.ComputeBlockHash(b));
                     string size = ByteFormat.ToHumanSize(b.StoredSizeBytes);
@@ -1157,7 +1435,7 @@ namespace HSTRYDoc
                     string created = b.CreatedUtc.ToLocalTime().ToString("dd.MM.yyyy HH:mm:ss:ffffff");
                     string changed = b.ModifiedUtc.ToLocalTime().ToString("dd.MM.yyyy HH:mm:ss:ffffff");
 
-                    var item = new ListViewItem(b.Title);
+                    ListViewItem item = new(b.Title);
                     item.SubItems.Add(hashHex);
                     item.SubItems.Add(size);
                     item.SubItems.Add(created);
@@ -1181,7 +1459,7 @@ namespace HSTRYDoc
         private int GetSelectedBlockIndex()
         {
             if (lvwBlocks.SelectedItems.Count == 0) return -1;
-            var item = lvwBlocks.SelectedItems[0];
+            ListViewItem item = lvwBlocks.SelectedItems[0];
             return item.Tag is int i ? i : item.Index;
         }
 
@@ -1231,7 +1509,7 @@ namespace HSTRYDoc
                 return;
             }
 
-            using var dlg = new FindDialog
+            using FindDialog dlg = new()
             {
                 StartPosition = FormStartPosition.CenterParent,
                 QueryText = string.IsNullOrWhiteSpace(_lastFindText) ? (rtfMainText.SelectedText ?? string.Empty) : _lastFindText,
@@ -1251,7 +1529,7 @@ namespace HSTRYDoc
             FindNextInEditor(_lastFindText, _lastFindMatchCase, _lastFindWholeWord, _lastFindWrap);
         }
 
-        private void UiSearchInContainer()
+        private async Task UiSearchInContainerAsync()
         {
             if (_container == null)
             {
@@ -1260,7 +1538,7 @@ namespace HSTRYDoc
                 return;
             }
 
-            using var dlg = new FindDialog
+            using FindDialog dlg = new()
             {
                 StartPosition = FormStartPosition.CenterParent,
                 Text = "Search in container",
@@ -1282,44 +1560,83 @@ namespace HSTRYDoc
             _lastFindWholeWord = dlg.WholeWord;
             _lastFindWrap = true;
 
-            var results = new List<ContainerSearchHit>();
-            using var tmp = new RichTextBox();
-
-            for (int i = 0; i < _container.Blocks.Count; i++)
+            try
             {
-                string rtf = _container.GetRtfDocument(i);
-                tmp.Rtf = rtf ?? string.Empty;
-                string text = tmp.Text ?? string.Empty;
+                // offload search; RTF->Text uses RichTextBox => run on STA thread
+                List<ContainerSearchHit> results = await reporterDiag.RunAsync(
+                    owner: this,
+                    title: "Search in container",
+                    work: async (progress, token) =>
+                    {
+                        progress.Report(new UiProgress
+                        {
+                            Message = "Searching…",
+                            Maximum = _container.Blocks.Count,
+                            Value = 0,
+                            Indeterminate = false
+                        });
 
-                int idx = FindIndex(text, query, dlg.MatchCase, dlg.WholeWord);
-                if (idx >= 0)
+                        return await StaTask.RunAsync(() =>
+                        {
+                            List<ContainerSearchHit> hits = new();
+                            using RichTextBox tmp = new();
+
+                            for (int i = 0; i < _container.Blocks.Count; i++)
+                            {
+                                token.ThrowIfCancellationRequested();
+
+                                progress.Report(new UiProgress
+                                {
+                                    Message = $"Searching block {i + 1}/{_container.Blocks.Count}…",
+                                    Value = i + 1
+                                });
+
+                                string rtf = _container.GetRtfDocument(i);
+                                tmp.Rtf = rtf ?? string.Empty;
+                                string text = tmp.Text ?? string.Empty;
+
+                                int idx = FindIndex(text, query, dlg.MatchCase, dlg.WholeWord);
+                                if (idx >= 0)
+                                {
+                                    string snippet = BuildSnippet(text, idx, query.Length, 40);
+                                    hits.Add(new ContainerSearchHit(i, _container.Blocks[i].Title, idx, snippet));
+                                }
+                            }
+
+                            return hits;
+                        }, token);
+                    });
+
+                if (results.Count == 0)
                 {
-                    string snippet = BuildSnippet(text, idx, query.Length, 40);
-                    results.Add(new ContainerSearchHit(i, _container.Blocks[i].Title, idx, snippet));
+                    MessageBox.Show(this, "No matches were found in the container.", "Search in container",
+                        MessageBoxButtons.OK, MessageBoxIcon.Information);
+                    return;
                 }
-            }
 
-            if (results.Count == 0)
+                using ContainerSearchResultsDialog resDlg = new();
+                resDlg.SetResults(results);
+
+                if (resDlg.ShowDialog(this) != DialogResult.OK)
+                    return;
+
+                ContainerSearchHit? hit = resDlg.SelectedHit;
+                if (hit == null) return;
+
+                if (!MaybeCommitCurrentBlock())
+                    return;
+
+                LoadBlockIntoEditor(hit.BlockIndex);
+                FindNextInEditor(query, dlg.MatchCase, dlg.WholeWord, wrap: true);
+            }
+            catch (OperationCanceledException)
             {
-                MessageBox.Show(this, "No matches were found in the container.", "Search in container",
-                    MessageBoxButtons.OK, MessageBoxIcon.Information);
-                return;
+                // user canceled search
             }
-
-            using var resDlg = new ContainerSearchResultsDialog();
-            resDlg.SetResults(results);
-
-            if (resDlg.ShowDialog(this) != DialogResult.OK)
-                return;
-
-            var hit = resDlg.SelectedHit;
-            if (hit == null) return;
-
-            if (!MaybeCommitCurrentBlock())
-                return;
-
-            LoadBlockIntoEditor(hit.BlockIndex);
-            FindNextInEditor(query, dlg.MatchCase, dlg.WholeWord, wrap: true);
+            catch (Exception ex)
+            {
+                MessageBox.Show(this, ex.Message, "Search in container", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
         }
 
         private void FindNextInEditor(string query, bool matchCase, bool wholeWord, bool wrap)
@@ -1353,7 +1670,7 @@ namespace HSTRYDoc
         {
             if (string.IsNullOrEmpty(needle)) return -1;
 
-            var comparison = matchCase ? StringComparison.CurrentCulture : StringComparison.CurrentCultureIgnoreCase;
+            StringComparison comparison = matchCase ? StringComparison.CurrentCulture : StringComparison.CurrentCultureIgnoreCase;
             int idx = haystack.IndexOf(needle, comparison);
             if (idx < 0) return -1;
 
@@ -1397,7 +1714,7 @@ namespace HSTRYDoc
 
             if (e.Control && e.Shift && e.KeyCode == Keys.F)
             {
-                UiSearchInContainer();
+                _ = UiSearchInContainerAsync();
                 e.Handled = true;
                 return;
             }
@@ -1541,7 +1858,7 @@ namespace HSTRYDoc
 
         private void ToggleSelectionStyle(FontStyle styleToToggle)
         {
-            var rtb = rtfMainText;
+            RichTextBox rtb = rtfMainText;
 
             int start = rtb.SelectionStart;
             int len = rtb.SelectionLength;
@@ -1630,7 +1947,7 @@ namespace HSTRYDoc
 
         private static Point AdjustToWorkingArea(Point desired, Size size)
         {
-            var wa = Screen.FromPoint(desired).WorkingArea;
+            Rectangle wa = Screen.FromPoint(desired).WorkingArea;
 
             int x = desired.X;
             int y = desired.Y;
@@ -1653,13 +1970,13 @@ namespace HSTRYDoc
                 return;
             }
 
-            var ts = ownerItem.Owner;
+            ToolStrip? ts = ownerItem.Owner;
             if (ts == null) return;
 
             Rectangle rect = ownerItem.Bounds;
             Point screenPos = ts.PointToScreen(new Point(rect.Left, rect.Bottom));
 
-            var dlg = new HSTRYDoc.colorPicker(currentColor)
+            colorPicker dlg = new(currentColor)
             {
                 StartPosition = FormStartPosition.Manual,
                 Location = AdjustToWorkingArea(screenPos, new Size(490, 288)),
@@ -1705,7 +2022,7 @@ namespace HSTRYDoc
             if (!MaybeCommitCurrentBlock())
                 return;
 
-            using var dlg = new exporterDiag(_container)
+            using exporterDiag dlg = new(_container)
             {
                 StartPosition = FormStartPosition.CenterParent
             };
@@ -1767,7 +2084,7 @@ namespace HSTRYDoc
 
         private void toolTableInsert_Click(object sender, EventArgs e)
         {
-            using var dlg = new InsertTableDialog(rtfMainText);
+            using InsertTableDialog dlg = new(rtfMainText);
             if (dlg.ShowDialog(this) != DialogResult.OK) return;
 
             if (!string.IsNullOrWhiteSpace(dlg.ResultRtf))
@@ -1995,7 +2312,7 @@ namespace HSTRYDoc
 
             string tail = rowSegment.Substring(rowTokenLocal);
 
-            var sb = new StringBuilder();
+            StringBuilder sb = new();
             sb.Append(header);
             for (int c = 0; c < ctx.ColCount; c++)
                 sb.Append(@"\intbl \cell ");
@@ -2018,7 +2335,7 @@ namespace HSTRYDoc
 
             string table = rtf.Substring(ctx.TableStart, tableLen);
 
-            var sb = new StringBuilder();
+            StringBuilder sb = new();
             int pos = 0;
 
             while (pos < table.Length)
@@ -2060,11 +2377,11 @@ namespace HSTRYDoc
 
             string header = rowSeg.Substring(0, intblPos);
 
-            var cellx = ParseCellx(header);
+            int[] cellx = ParseCellx(header);
             int colCount = cellx.Length;
             if (colCount <= 0) return false;
 
-            if (!TryParseCells(rowSeg, intblPos, out var cells, out string tail))
+            if (!TryParseCells(rowSeg, intblPos, out string[]? cells, out string tail))
                 return false;
 
             if (cells.Length != colCount)
@@ -2093,7 +2410,7 @@ namespace HSTRYDoc
                 int widthRef = cellx[colIndex] - (colIndex == 0 ? 0 : cellx[colIndex - 1]);
                 if (widthRef <= 0) widthRef = 720;
 
-                var newCellx = new int[colCount + 1];
+                int[] newCellx = new int[colCount + 1];
                 for (int i = 0; i < insertPos; i++)
                     newCellx[i] = cellx[i];
 
@@ -2102,7 +2419,7 @@ namespace HSTRYDoc
                 for (int i = insertPos; i < colCount; i++)
                     newCellx[i + 1] = cellx[i] + widthRef;
 
-                var newCells = new string[colCount + 1];
+                string[] newCells = new string[colCount + 1];
                 for (int i = 0; i < insertPos; i++)
                     newCells[i] = cells[i];
 
@@ -2123,14 +2440,14 @@ namespace HSTRYDoc
                 int removedWidth = cellx[removePos] - (removePos == 0 ? 0 : cellx[removePos - 1]);
                 if (removedWidth < 0) removedWidth = 0;
 
-                var newCellx = new int[colCount - 1];
+                int[] newCellx = new int[colCount - 1];
                 for (int i = 0; i < removePos; i++)
                     newCellx[i] = cellx[i];
 
                 for (int i = removePos + 1; i < colCount; i++)
                     newCellx[i - 1] = cellx[i] - removedWidth;
 
-                var newCells = new string[colCount - 1];
+                string[] newCells = new string[colCount - 1];
                 for (int i = 0; i < removePos; i++)
                     newCells[i] = cells[i];
 
@@ -2146,7 +2463,7 @@ namespace HSTRYDoc
 
         private static int[] ParseCellx(string header)
         {
-            var list = new List<int>();
+            List<int> list = new();
             int i = 0;
 
             while (true)
@@ -2174,7 +2491,7 @@ namespace HSTRYDoc
 
         private static bool TryParseCells(string rowSeg, int intblPos, out string[] cells, out string tail)
         {
-            var list = new List<string>();
+            List<string> list = new();
             int i = intblPos;
 
             while (true)
@@ -2203,7 +2520,7 @@ namespace HSTRYDoc
 
             string prefix = header.Substring(0, first);
 
-            var sb = new StringBuilder(prefix.Length + newCellx.Length * 16);
+            StringBuilder sb = new(prefix.Length + newCellx.Length * 16);
             sb.Append(prefix);
 
             foreach (int v in newCellx)
@@ -2230,7 +2547,7 @@ namespace HSTRYDoc
                 return;
             }
 
-            using var dlg = new KeyManagerDialog(_container, _containerPath!, _privateKeyPath);
+            using KeyManagerDialog dlg = new(_container, _containerPath!, _privateKeyPath);
             if (dlg.ShowDialog(this) != DialogResult.OK)
                 return;
 
@@ -2266,7 +2583,7 @@ namespace HSTRYDoc
 
         private void AdjustSelectionFontSize(float delta)
         {
-            var rtb = rtfMainText;
+            RichTextBox rtb = rtfMainText;
             if (rtb == null) return;
 
             int start = rtb.SelectionStart;
@@ -2422,7 +2739,7 @@ namespace HSTRYDoc
         {
             if (rtfMainText.IsDisposed) return;
 
-            var pf = new PARAFORMAT2
+            PARAFORMAT2 pf = new()
             {
                 cbSize = (uint)Marshal.SizeOf<PARAFORMAT2>(),
                 dwMask = PFM_NUMBERING | PFM_NUMBERINGSTART | PFM_OFFSET | PFM_STARTINDENT,
@@ -2443,7 +2760,7 @@ namespace HSTRYDoc
         {
             if (rtb.IsDisposed) return PFN_NONE;
 
-            var pf = new PARAFORMAT2
+            PARAFORMAT2 pf = new()
             {
                 cbSize = (uint)Marshal.SizeOf<PARAFORMAT2>(),
                 rgxTabs = new int[32]
@@ -2495,6 +2812,11 @@ namespace HSTRYDoc
 
         [DllImport("user32.dll", CharSet = CharSet.Auto)]
         private static extern IntPtr SendMessage(IntPtr hWnd, int msg, IntPtr wParam, ref PARAFORMAT2 lParam);
+
+        private async void toolStripButton1_Click_1(object sender, EventArgs e)
+        {
+            await CreateTestBlocksAsync(count: 10000, minWordsPerBlock: 2500, maxWordsPerBlock: 5000);
+        }
     }
 
     public sealed record ContainerSearchHit(int BlockIndex, string BlockTitle, int IndexInText, string Snippet);

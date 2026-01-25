@@ -36,6 +36,7 @@
             saveContainerToolStripButton = new ToolStripButton();
             toolStripSeparator = new ToolStripSeparator();
             hilfeToolStripButton = new ToolStripButton();
+            btnTestblocks = new ToolStripButton();
             statusStrip1 = new StatusStrip();
             ContainerSizeLabel = new ToolStripStatusLabel();
             splitContainer1 = new SplitContainer();
@@ -109,6 +110,7 @@
             helpToolStripMenuItem = new ToolStripMenuItem();
             aboutToolStripMenuItem = new ToolStripMenuItem();
             InactiveIcon = new NotifyIcon(components);
+            toolStripSeparator5 = new ToolStripSeparator();
             mainToolstrip.SuspendLayout();
             statusStrip1.SuspendLayout();
             ((System.ComponentModel.ISupportInitialize)splitContainer1).BeginInit();
@@ -125,7 +127,7 @@
             // mainToolstrip
             // 
             mainToolstrip.ImageScalingSize = new Size(20, 20);
-            mainToolstrip.Items.AddRange(new ToolStripItem[] { newBlockToolStripButton, openContainerToolStripButton, saveContainerToolStripButton, toolStripSeparator, hilfeToolStripButton });
+            mainToolstrip.Items.AddRange(new ToolStripItem[] { newBlockToolStripButton, openContainerToolStripButton, saveContainerToolStripButton, toolStripSeparator, hilfeToolStripButton, toolStripSeparator5, btnTestblocks });
             mainToolstrip.Location = new Point(0, 30);
             mainToolstrip.Name = "mainToolstrip";
             mainToolstrip.Size = new Size(1168, 27);
@@ -173,6 +175,18 @@
             hilfeToolStripButton.Size = new Size(29, 24);
             hilfeToolStripButton.Text = "Hi&lfe";
             hilfeToolStripButton.Click += hilfeToolStripButton_Click;
+            // 
+            // btnTestblocks
+            // 
+            btnTestblocks.DisplayStyle = ToolStripItemDisplayStyle.Image;
+            btnTestblocks.Image = (Image)resources.GetObject("btnTestblocks.Image");
+            btnTestblocks.ImageTransparentColor = Color.Magenta;
+            btnTestblocks.Name = "btnTestblocks";
+            btnTestblocks.Size = new Size(29, 24);
+            btnTestblocks.Text = "Insert Test-Blocks ( Testmode )";
+            btnTestblocks.TextAlign = ContentAlignment.MiddleRight;
+            btnTestblocks.Visible = false;
+            btnTestblocks.Click += toolStripButton1_Click_1;
             // 
             // statusStrip1
             // 
@@ -759,6 +773,12 @@
             InactiveIcon.Text = "notifyIcon1";
             InactiveIcon.Visible = true;
             // 
+            // toolStripSeparator5
+            // 
+            toolStripSeparator5.Name = "toolStripSeparator5";
+            toolStripSeparator5.Size = new Size(6, 27);
+            toolStripSeparator5.Visible = false;
+            // 
             // hsMain
             // 
             AutoScaleDimensions = new SizeF(8F, 20F);
@@ -874,5 +894,7 @@
         private ToolStripButton toolStripButtonBullets;
         private ToolStripButton toolButtonBulletsNumeric;
         private Panel panel1;
+        private ToolStripButton btnTestblocks;
+        private ToolStripSeparator toolStripSeparator5;
     }
 }

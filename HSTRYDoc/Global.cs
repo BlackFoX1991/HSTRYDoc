@@ -23,5 +23,14 @@ namespace HSTRYDoc
         /// File magic for quick identification.
         /// </summary>
         public static readonly byte[] FileMagic = { (byte)'H', (byte)'S', (byte)'T', (byte)'R', (byte)'Y' };
+
+        /// <summary>
+        /// Gets or sets a value indicating whether the application is running in test mode.
+        /// </summary>
+        /// <remarks>When enabled, test mode may alter application behavior to facilitate testing
+        /// scenarios. This property should be set before performing operations that depend on the application's
+        /// execution mode.</remarks>
+        public static bool Testmode { get; set; } = false;
+
     }
 }

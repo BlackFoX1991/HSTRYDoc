@@ -4,6 +4,7 @@ using System.Drawing.Printing;
 using System.IO;
 using System.Linq;
 using System.Text;
+using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Forms;
 
@@ -18,9 +19,6 @@ namespace HSTRYDoc
 
         // PDF: full file path. RTF/TXT: folder path.
         private string _outputPath = string.Empty;
-
-        // Used for RTF -> plain text conversion
-        private readonly RichTextBox _rtfToText = new RichTextBox();
 
         public exporterDiag(HSTRYContainer container)
         {
@@ -58,7 +56,7 @@ namespace HSTRYDoc
             // Fill the list
             PopulateBlocks();
 
-            // Progress bar initial
+            // Keep designer progress bar unused (status now in reporterDiag)
             prgExport.Visible = false;
             prgExport.Minimum = 0;
             prgExport.Value = 0;
@@ -125,7 +123,7 @@ namespace HSTRYDoc
             var indices = new List<int>();
             foreach (ListViewItem it in lvwBlocks.Items)
             {
-                if(it is null) continue;
+                if (it is null) continue;
                 if (!it.Checked) continue;
                 if (it.Tag is int idx) indices.Add(idx);
             }
@@ -190,50 +188,64 @@ namespace HSTRYDoc
                 return;
             }
 
-            // UI lock
+            // UI lock for this dialog (the reporterDiag will show progress)
             SetUiEnabled(false);
-
-            // Progress bar
-            prgExport.Visible = true;
-            prgExport.Minimum = 0;
-            prgExport.Maximum = indices.Count;
-            prgExport.Value = 0;
-            prgExport.Style = ProgressBarStyle.Continuous;
 
             try
             {
-                // Run export without freezing UI
-                var progress = new Progress<int>(v =>
-                {
-                    int val = Math.Max(prgExport.Minimum, Math.Min(prgExport.Maximum, v));
-                    prgExport.Value = val;
-                });
-
-                await Task.Run(() =>
-                {
-                    switch (_format)
+                await reporterDiag.RunAsync(
+                    owner: this,
+                    title: "Export",
+                    work: async (progress, token) =>
                     {
-                        case ExportFormat.Pdf:
-                            ExportPdf(_outputPath, indices, progress);
-                            break;
-                        case ExportFormat.Rtf:
-                            ExportRtfFolder(_outputPath, indices, progress);
-                            break;
-                        case ExportFormat.Txt:
-                            ExportTxtFolder(_outputPath, indices, progress);
-                            break;
-                    }
-                });
+                        progress.Report(new UiProgress
+                        {
+                            Message = "Preparing export…",
+                            Indeterminate = true
+                        });
 
-                // done
-                prgExport.Visible = false;
+                        // Many WinForms components (RichTextBox/PrintDocument) behave best on STA.
+                        await StaTask.RunAsync(() =>
+                        {
+                            token.ThrowIfCancellationRequested();
+
+                            progress.Report(new UiProgress
+                            {
+                                Message = $"Exporting {indices.Count} block(s)…",
+                                Indeterminate = false,
+                                Maximum = indices.Count,
+                                Value = 0
+                            });
+
+                            switch (_format)
+                            {
+                                case ExportFormat.Pdf:
+                                    ExportPdf(_outputPath, indices, progress, token);
+                                    break;
+
+                                case ExportFormat.Rtf:
+                                    ExportRtfFolder(_outputPath, indices, progress, token);
+                                    break;
+
+                                case ExportFormat.Txt:
+                                    ExportTxtFolder(_outputPath, indices, progress, token);
+                                    break;
+                            }
+                        }, token);
+                    });
+
                 MessageBox.Show(this, "Export completed successfully.", "Export", MessageBoxButtons.OK, MessageBoxIcon.Information);
                 DialogResult = DialogResult.OK;
                 Close();
             }
+            catch (OperationCanceledException)
+            {
+                MessageBox.Show(this, "Export cancelled.", "Export", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                SetUiEnabled(true);
+                UpdateExportButtonState();
+            }
             catch (Exception ex)
             {
-                prgExport.Visible = false;
                 MessageBox.Show(this, ex.Message, "Export error", MessageBoxButtons.OK, MessageBoxIcon.Error);
                 SetUiEnabled(true);
                 UpdateExportButtonState();
@@ -256,14 +268,25 @@ namespace HSTRYDoc
         // ----------------------------
         // RTF export (multiple files)
         // ----------------------------
-        private void ExportRtfFolder(string folder, List<int> indices, IProgress<int> progress)
+        private void ExportRtfFolder(string folder, List<int> indices, IProgress<UiProgress> progress, CancellationToken token)
         {
             Directory.CreateDirectory(folder);
 
             int done = 0;
             foreach (int i in indices)
             {
+                token.ThrowIfCancellationRequested();
+
                 var b = _container.Blocks[i];
+
+                progress.Report(new UiProgress
+                {
+                    Message = $"Exporting RTF {done + 1}/{indices.Count}: {b.Title}",
+                    Value = done,
+                    Maximum = indices.Count,
+                    Indeterminate = false
+                });
+
                 string rtf = _container.GetRtfDocument(i) ?? string.Empty;
 
                 string safe = MakeSafeFileName($"{i + 1:D4}_{b.Title}");
@@ -272,26 +295,38 @@ namespace HSTRYDoc
                 File.WriteAllText(path, rtf, Encoding.UTF8);
 
                 done++;
-                progress.Report(done);
+                progress.Report(new UiProgress { Value = done });
             }
         }
 
         // ----------------------------
-        // TXT export (multiple files)
+        // TXT export (multiple files) - uses RichTextBox on STA thread
         // ----------------------------
-        private void ExportTxtFolder(string folder, List<int> indices, IProgress<int> progress)
+        private void ExportTxtFolder(string folder, List<int> indices, IProgress<UiProgress> progress, CancellationToken token)
         {
             Directory.CreateDirectory(folder);
+
+            using var rtb = new RichTextBox();
 
             int done = 0;
             foreach (int i in indices)
             {
+                token.ThrowIfCancellationRequested();
+
                 var b = _container.Blocks[i];
+
+                progress.Report(new UiProgress
+                {
+                    Message = $"Exporting TXT {done + 1}/{indices.Count}: {b.Title}",
+                    Value = done,
+                    Maximum = indices.Count,
+                    Indeterminate = false
+                });
+
                 string rtf = _container.GetRtfDocument(i) ?? string.Empty;
 
-                // RTF -> plain text
-                _rtfToText.Rtf = rtf;
-                string text = _rtfToText.Text ?? string.Empty;
+                rtb.Rtf = rtf;
+                string text = rtb.Text ?? string.Empty;
 
                 string safe = MakeSafeFileName($"{i + 1:D4}_{b.Title}");
                 string path = Path.Combine(folder, safe + ".txt");
@@ -299,7 +334,7 @@ namespace HSTRYDoc
                 File.WriteAllText(path, text, Encoding.UTF8);
 
                 done++;
-                progress.Report(done);
+                progress.Report(new UiProgress { Value = done });
             }
         }
 
@@ -308,7 +343,7 @@ namespace HSTRYDoc
         // Each block starts on a new page.
         // Uses Windows "Microsoft Print to PDF".
         // ----------------------------
-        private void ExportPdf(string pdfPath, List<int> indices, IProgress<int> progress)
+        private void ExportPdf(string pdfPath, List<int> indices, IProgress<UiProgress> progress, CancellationToken token)
         {
             if (indices.Count == 0) return;
 
@@ -325,10 +360,10 @@ namespace HSTRYDoc
             doc.PrinterSettings.PrintToFile = true;
             doc.PrinterSettings.PrintFileName = pdfPath;
 
-            // Print state
             int blockPos = 0;
             int charPos = 0;
             bool loadedBlock = false;
+            bool cancelled = false;
 
             var rtb = new RichTextBox();
 
@@ -337,6 +372,7 @@ namespace HSTRYDoc
                 blockPos = 0;
                 charPos = 0;
                 loadedBlock = false;
+                cancelled = false;
                 RichTextBoxPrintHelper.FormatRangeDone(rtb);
             };
 
@@ -348,6 +384,13 @@ namespace HSTRYDoc
 
             doc.PrintPage += (_, e) =>
             {
+                if (token.IsCancellationRequested)
+                {
+                    cancelled = true;
+                    e.HasMorePages = false;
+                    return;
+                }
+
                 if (blockPos >= indices.Count)
                 {
                     e.HasMorePages = false;
@@ -355,9 +398,18 @@ namespace HSTRYDoc
                 }
 
                 int blockIndex = indices[blockPos];
+                var b = _container.Blocks[blockIndex];
 
                 if (!loadedBlock)
                 {
+                    progress.Report(new UiProgress
+                    {
+                        Message = $"Exporting PDF {blockPos + 1}/{indices.Count}: {b.Title}",
+                        Value = blockPos,
+                        Maximum = indices.Count,
+                        Indeterminate = false
+                    });
+
                     rtb.Rtf = _container.GetRtfDocument(blockIndex) ?? string.Empty;
                     charPos = 0;
                     loadedBlock = true;
@@ -378,14 +430,16 @@ namespace HSTRYDoc
                 loadedBlock = false;
                 RichTextBoxPrintHelper.FormatRangeDone(rtb);
 
-                progress.Report(blockPos);
+                progress.Report(new UiProgress { Value = blockPos });
 
                 // force a new page if there is another block
                 e.HasMorePages = blockPos < indices.Count;
             };
 
-            // Print (this uses the configured PrintToFile path)
             doc.Print();
+
+            if (cancelled)
+                throw new OperationCanceledException(token);
         }
 
         private static string MakeSafeFileName(string name)

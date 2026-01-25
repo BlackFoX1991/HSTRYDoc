@@ -6,11 +6,11 @@
     <Nullable>enable</Nullable>
     <UseWindowsForms>true</UseWindowsForms>
     <ImplicitUsings>enable</ImplicitUsings>
-    <ApplicationIcon>HstryDocu_ultra_smooth_multisize.ico</ApplicationIcon>
+    <ApplicationIcon>HstryDocu_HSTRY_multisize.ico</ApplicationIcon>
   </PropertyGroup>
 
   <ItemGroup>
-    <Content Include="HstryDocu_ultra_smooth_multisize.ico" />
+    <Content Include="HstryDocu_HSTRY_multisize.ico" />
   </ItemGroup>
 
   <ItemGroup>
