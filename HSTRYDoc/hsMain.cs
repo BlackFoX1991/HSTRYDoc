@@ -998,8 +998,10 @@ namespace HSTRYDoc
                 ? $"Container: {ByteFormat.ToHumanSize(_container!.GetStoredSizeBytes())}"
                 : "<Container_Size>";
 
-            Text = _containerDirty ? $"{Global.AppName} *" : Global.AppName;
+            // NEW: Title logic centralized
+            UpdateWindowTitle();
         }
+
 
         private void hsMain_FormClosing(object? sender, FormClosingEventArgs e)
         {
@@ -3015,6 +3017,31 @@ namespace HSTRYDoc
 
             return true;
         }
+
+        private void UpdateWindowTitle()
+        {
+            // Du kannst hier Global.AppName nutzen, falls das bereits "HstryDocu" ist:
+            string app = Global.AppName; // oder: "HstryDocu";
+
+            // Wenn ein Container offen ist, zeige den Pfad in [ ... ]
+            string title = app;
+
+            if (_container != null)
+            {
+                string path = string.IsNullOrWhiteSpace(_containerPath)
+                    ? "<unsaved>"
+                    : _containerPath!;
+
+                title = $"{app} - [ {path} ]";
+            }
+
+            // Wenn irgendetwas geändert wurde => Stern hinten dran
+            if (_containerDirty)
+                title += " *";
+
+            Text = title;
+        }
+
 
 
         private void ToggleBullets()
