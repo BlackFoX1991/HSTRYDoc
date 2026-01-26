@@ -8,8 +8,15 @@ namespace HSTRYDoc
 {
     public sealed class AppState
     {
+        // NEW: if true, ask on every start whether to search drives for HSTRY_KEY
+        public bool UseDriveKeySearch { get; set; } = false;
+
+
         public WindowPlacement MainWindow { get; set; } = new WindowPlacement();
         public List<RecentFileEntry> RecentFiles { get; set; } = new List<RecentFileEntry>();
+
+        // NEW: stores the user's chosen private key path
+        public string? PrivateKeyPath { get; set; }
 
         private const int MaxRecent = 20;
 
@@ -85,7 +92,6 @@ namespace HSTRYDoc
 
             try { fullPath = Path.GetFullPath(fullPath); } catch { /* ignore */ }
 
-            // Only store existing files (avoid dead entries)
             if (!File.Exists(fullPath))
                 return;
 
@@ -112,11 +118,16 @@ namespace HSTRYDoc
 
         private void TrimAndCleanup()
         {
+            // Keep only existing recent files
             RecentFiles = RecentFiles
                 .Where(x => !string.IsNullOrWhiteSpace(x.FilePath) && File.Exists(x.FilePath))
                 .OrderByDescending(x => x.LastUsedUtcTicks)
                 .Take(MaxRecent)
                 .ToList();
+
+            // If stored private key path no longer exists, clear it
+            if (!string.IsNullOrWhiteSpace(PrivateKeyPath) && !File.Exists(PrivateKeyPath))
+                PrivateKeyPath = null;
         }
     }
 
@@ -126,9 +137,7 @@ namespace HSTRYDoc
         public int Y { get; set; } = int.MinValue;
         public int Width { get; set; } = int.MinValue;
         public int Height { get; set; } = int.MinValue;
-
-        // store as int to avoid enum serialization quirks
-        public int WindowState { get; set; } = 0; // 0=Normal, 1=Minimized, 2=Maximized
+        public int WindowState { get; set; } = 0;
     }
 
     public sealed class RecentFileEntry
@@ -144,8 +153,6 @@ namespace HSTRYDoc
                 catch { return string.Empty; }
             }
         }
-
-
 
         public string LastUsedLocalFormatted
         {
