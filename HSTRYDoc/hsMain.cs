@@ -8,6 +8,8 @@ namespace HSTRYDoc
     public partial class hsMain : Form
     {
 
+        private bool _closingAfterSave = false;
+
         private enum KeyResolveOutcome
         {
             Success,     // session key chosen
@@ -1003,8 +1005,13 @@ namespace HSTRYDoc
         }
 
 
-        private void hsMain_FormClosing(object? sender, FormClosingEventArgs e)
+
+
+        private async void hsMain_FormClosing(object? sender, FormClosingEventArgs e)
         {
+            if (_closingAfterSave)
+                return;
+
             if (!MaybeCommitCurrentBlock())
             {
                 e.Cancel = true;
@@ -1028,11 +1035,17 @@ namespace HSTRYDoc
 
                 if (res == DialogResult.Yes)
                 {
-                    if (!UiSaveContainerBlocking())
-                    {
-                        e.Cancel = true;
+                    e.Cancel = true; // cancel close; we will close after save
+
+                    bool saved = await UiSaveContainerAsync();
+                    if (!saved)
                         return;
-                    }
+
+                    _closingAfterSave = true;
+                    try { Close(); }
+                    finally { _closingAfterSave = false; }
+
+                    return;
                 }
             }
 
@@ -1042,9 +1055,7 @@ namespace HSTRYDoc
             _acRebuildTimer.Stop();
             _rtfAutoComplete?.Dispose();
 
-            // IMPORTANT: stop background hash work before the form/control is disposed
             CancelHashWorkers();
-
             _container?.CloseKeyMaterial();
         }
 
@@ -2808,7 +2819,7 @@ namespace HSTRYDoc
         // ============================================================
         private void keyManagementToolStripMenuItem_Click(object sender, EventArgs e) => UiKeyManagement();
 
-        
+
 
         private void btnFontSizePls_Click(object sender, EventArgs e)
         {
@@ -3214,6 +3225,57 @@ namespace HSTRYDoc
         {
             await CreateTestBlocksAsync(count: 10000, minWordsPerBlock: 2500, maxWordsPerBlock: 5000);
         }
+
+        private void dataMasksToolStripMenuItem_Click(object sender, EventArgs e)
+        {
+            if (_container == null)
+            {
+                MessageBox.Show(this, "No container is currently open.", "Additional Data",
+                    MessageBoxButtons.OK, MessageBoxIcon.Information);
+                return;
+            }
+
+            // Avoid overwriting unsaved editor state when we reload later
+            if (!MaybeCommitCurrentBlock())
+                return;
+
+            using var dlg = new MaskedData(_container);
+            dlg.ShowDialog(this);
+
+            if (dlg.ContainerChanged)
+            {
+                _containerDirty = true;
+
+                // Stop background work that might update list / hashes while we rebuild
+                CancelHashWorkers();
+
+                // Prevent selection-change handlers from fighting our refresh/reload
+                _suppressBlockSelectionChanged = true;
+                try
+                {
+                    RefreshBlockList(selectIndex: _currentBlockIndex >= 0 ? _currentBlockIndex : null);
+
+                    // Requirement: reload currently selected block so user doesn't see stale data
+                    if (_currentBlockIndex >= 0)
+                        LoadBlockIntoEditor(_currentBlockIndex);
+                }
+                finally
+                {
+                    _suppressBlockSelectionChanged = false;
+                }
+            }
+            else
+            {
+                // Even if nothing changed, you *can* reload; requirement says reload on close to avoid stale data.
+                // If you only want this when changed, remove this block.
+                if (_currentBlockIndex >= 0)
+                    LoadBlockIntoEditor(_currentBlockIndex);
+            }
+
+            UpdateUiState();
+        }
+
+
     }
 
     public sealed record ContainerSearchHit(int BlockIndex, string BlockTitle, int IndexInText, string Snippet);

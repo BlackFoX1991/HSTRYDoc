@@ -108,10 +108,11 @@
             searchInBlockToolStripMenuItem = new ToolStripMenuItem();
             searchInContainerToolStripMenuItem = new ToolStripMenuItem();
             keyManagementToolStripMenuItem = new ToolStripMenuItem();
+            keyLookupExternalDriveToolStripMenuItem = new ToolStripMenuItem();
+            dataMasksToolStripMenuItem = new ToolStripMenuItem();
             helpToolStripMenuItem = new ToolStripMenuItem();
             aboutToolStripMenuItem = new ToolStripMenuItem();
             InactiveIcon = new NotifyIcon(components);
-            keyLookupExternalDriveToolStripMenuItem = new ToolStripMenuItem();
             mainToolstrip.SuspendLayout();
             statusStrip1.SuspendLayout();
             ((System.ComponentModel.ISupportInitialize)splitContainer1).BeginInit();
@@ -725,7 +726,7 @@
             // 
             // toolsToolStripMenuItem
             // 
-            toolsToolStripMenuItem.DropDownItems.AddRange(new ToolStripItem[] { searchInBlockToolStripMenuItem, searchInContainerToolStripMenuItem, keyManagementToolStripMenuItem });
+            toolsToolStripMenuItem.DropDownItems.AddRange(new ToolStripItem[] { searchInBlockToolStripMenuItem, searchInContainerToolStripMenuItem, keyManagementToolStripMenuItem, dataMasksToolStripMenuItem });
             toolsToolStripMenuItem.Name = "toolsToolStripMenuItem";
             toolsToolStripMenuItem.Size = new Size(47, 20);
             toolsToolStripMenuItem.Text = "Tools";
@@ -734,14 +735,14 @@
             // 
             searchInBlockToolStripMenuItem.Image = (Image)resources.GetObject("searchInBlockToolStripMenuItem.Image");
             searchInBlockToolStripMenuItem.Name = "searchInBlockToolStripMenuItem";
-            searchInBlockToolStripMenuItem.Size = new Size(190, 26);
+            searchInBlockToolStripMenuItem.Size = new Size(229, 26);
             searchInBlockToolStripMenuItem.Text = "Search in Block...";
             // 
             // searchInContainerToolStripMenuItem
             // 
             searchInContainerToolStripMenuItem.Image = (Image)resources.GetObject("searchInContainerToolStripMenuItem.Image");
             searchInContainerToolStripMenuItem.Name = "searchInContainerToolStripMenuItem";
-            searchInContainerToolStripMenuItem.Size = new Size(190, 26);
+            searchInContainerToolStripMenuItem.Size = new Size(229, 26);
             searchInContainerToolStripMenuItem.Text = "Search in Container...";
             // 
             // keyManagementToolStripMenuItem
@@ -749,9 +750,24 @@
             keyManagementToolStripMenuItem.DropDownItems.AddRange(new ToolStripItem[] { keyLookupExternalDriveToolStripMenuItem });
             keyManagementToolStripMenuItem.Image = (Image)resources.GetObject("keyManagementToolStripMenuItem.Image");
             keyManagementToolStripMenuItem.Name = "keyManagementToolStripMenuItem";
-            keyManagementToolStripMenuItem.Size = new Size(190, 26);
+            keyManagementToolStripMenuItem.Size = new Size(229, 26);
             keyManagementToolStripMenuItem.Text = "Key Management";
             keyManagementToolStripMenuItem.Click += keyManagementToolStripMenuItem_Click;
+            // 
+            // keyLookupExternalDriveToolStripMenuItem
+            // 
+            keyLookupExternalDriveToolStripMenuItem.CheckOnClick = true;
+            keyLookupExternalDriveToolStripMenuItem.Name = "keyLookupExternalDriveToolStripMenuItem";
+            keyLookupExternalDriveToolStripMenuItem.Size = new Size(212, 22);
+            keyLookupExternalDriveToolStripMenuItem.Text = "Key-Lookup external Drive";
+            // 
+            // dataMasksToolStripMenuItem
+            // 
+            dataMasksToolStripMenuItem.Image = (Image)resources.GetObject("dataMasksToolStripMenuItem.Image");
+            dataMasksToolStripMenuItem.Name = "dataMasksToolStripMenuItem";
+            dataMasksToolStripMenuItem.Size = new Size(229, 26);
+            dataMasksToolStripMenuItem.Text = "Defined Data Management...";
+            dataMasksToolStripMenuItem.Click += dataMasksToolStripMenuItem_Click;
             // 
             // helpToolStripMenuItem
             // 
@@ -773,13 +789,6 @@
             InactiveIcon.Icon = (Icon)resources.GetObject("InactiveIcon.Icon");
             InactiveIcon.Text = "notifyIcon1";
             InactiveIcon.Visible = true;
-            // 
-            // keyLookupExternalDriveToolStripMenuItem
-            // 
-            keyLookupExternalDriveToolStripMenuItem.CheckOnClick = true;
-            keyLookupExternalDriveToolStripMenuItem.Name = "keyLookupExternalDriveToolStripMenuItem";
-            keyLookupExternalDriveToolStripMenuItem.Size = new Size(212, 22);
-            keyLookupExternalDriveToolStripMenuItem.Text = "Key-Lookup external Drive";
             // 
             // hsMain
             // 
@@ -898,5 +907,6 @@
         private ToolStripButton btnTestblocks;
         private ToolStripSeparator toolStripSeparator5;
         private ToolStripMenuItem keyLookupExternalDriveToolStripMenuItem;
+        private ToolStripMenuItem dataMasksToolStripMenuItem;
     }
 }
