@@ -327,7 +327,7 @@
             rtfMainText.EnableAutoDragDrop = true;
             rtfMainText.Location = new Point(8, 20);
             rtfMainText.Name = "rtfMainText";
-            rtfMainText.Size = new Size(622, 473);
+            rtfMainText.Size = new Size(622, 496);
             rtfMainText.TabIndex = 0;
             rtfMainText.Text = "";
             // 
@@ -424,12 +424,12 @@
             // 
             // pnlScales
             // 
-            pnlScales.Controls.Add(panel3);
             pnlScales.Controls.Add(rtfScaleBar);
+            pnlScales.Controls.Add(panel3);
             pnlScales.Dock = DockStyle.Bottom;
-            pnlScales.Location = new Point(8, 493);
+            pnlScales.Location = new Point(8, 516);
             pnlScales.Name = "pnlScales";
-            pnlScales.Size = new Size(622, 45);
+            pnlScales.Size = new Size(622, 22);
             pnlScales.TabIndex = 2;
             // 
             // panel3
@@ -439,16 +439,16 @@
             panel3.Dock = DockStyle.Fill;
             panel3.Location = new Point(0, 0);
             panel3.Name = "panel3";
-            panel3.Size = new Size(204, 45);
+            panel3.Size = new Size(622, 22);
             panel3.TabIndex = 2;
             // 
             // btnResetScale
             // 
-            btnResetScale.Dock = DockStyle.Fill;
+            btnResetScale.Dock = DockStyle.Left;
             btnResetScale.FlatStyle = FlatStyle.Flat;
             btnResetScale.Location = new Point(101, 0);
             btnResetScale.Name = "btnResetScale";
-            btnResetScale.Size = new Size(103, 45);
+            btnResetScale.Size = new Size(75, 22);
             btnResetScale.TabIndex = 1;
             btnResetScale.Text = "Reset Scale";
             btnResetScale.UseVisualStyleBackColor = true;
@@ -461,24 +461,24 @@
             lblScaleLabel.ForeColor = Color.White;
             lblScaleLabel.Location = new Point(0, 0);
             lblScaleLabel.Name = "lblScaleLabel";
-            lblScaleLabel.Size = new Size(101, 45);
+            lblScaleLabel.Size = new Size(101, 22);
             lblScaleLabel.TabIndex = 0;
             lblScaleLabel.Text = "100%";
             lblScaleLabel.TextAlign = ContentAlignment.MiddleCenter;
             // 
             // rtfScaleBar
             // 
+            rtfScaleBar.AutoSize = false;
             rtfScaleBar.Dock = DockStyle.Right;
             rtfScaleBar.LargeChange = 25;
-            rtfScaleBar.Location = new Point(204, 0);
+            rtfScaleBar.Location = new Point(356, 0);
             rtfScaleBar.Maximum = 400;
             rtfScaleBar.Minimum = 25;
             rtfScaleBar.Name = "rtfScaleBar";
-            rtfScaleBar.Size = new Size(418, 45);
+            rtfScaleBar.Size = new Size(266, 22);
             rtfScaleBar.SmallChange = 5;
             rtfScaleBar.TabIndex = 1;
             rtfScaleBar.TickFrequency = 25;
-            rtfScaleBar.TickStyle = TickStyle.Both;
             rtfScaleBar.Value = 100;
             rtfScaleBar.Scroll += rtfScaleBar_Scroll;
             // 
@@ -898,7 +898,6 @@
             panel1.ResumeLayout(false);
             ctxRtf.ResumeLayout(false);
             pnlScales.ResumeLayout(false);
-            pnlScales.PerformLayout();
             panel3.ResumeLayout(false);
             ((System.ComponentModel.ISupportInitialize)rtfScaleBar).EndInit();
             toolStripRtf.ResumeLayout(false);
