@@ -66,6 +66,7 @@ namespace HSTRYDoc
         private bool _lastFindWholeWord = false;
         private bool _lastFindWrap = true;
 
+
         public hsMain()
         {
             InitializeComponent();
@@ -151,7 +152,7 @@ namespace HSTRYDoc
                     {
                         progress.Report(new UiProgress
                         {
-                            Message = "Preparing…",
+                            Message = "Preparing ",
                             Indeterminate = false,
                             Maximum = count,
                             Value = 0
@@ -224,7 +225,7 @@ namespace HSTRYDoc
 
         private static string BuildRandomParagraphs(string[] words, int wordCount)
         {
-            // Create 2–6 paragraphs depending on size
+            // Create 2 6 paragraphs depending on size
             int paraCount = Math.Clamp(wordCount / 60, 2, 6);
 
             int remaining = wordCount;
@@ -644,8 +645,8 @@ namespace HSTRYDoc
         private static bool IsWordCharForAutoComplete(char c)
         {
             return char.IsLetterOrDigit(c) || c == '_' ||
-                   c == 'Ä' || c == 'Ö' || c == 'Ü' ||
-                   c == 'ä' || c == 'ö' || c == 'ü' || c == 'ß';
+                   c == ' ' || c == ' ' || c == ' ' ||
+                   c == ' ' || c == ' ' || c == ' ' || c == ' ';
         }
 
         private static bool SetsEqual(HashSet<string> a, HashSet<string> b)
@@ -831,7 +832,7 @@ namespace HSTRYDoc
                     {
                         progress.Report(new UiProgress
                         {
-                            Message = "Opening container…",
+                            Message = "Opening container ",
                             Indeterminate = true
                         });
 
@@ -1097,7 +1098,7 @@ namespace HSTRYDoc
                     title: "Create container",
                     work: async (progress, token) =>
                     {
-                        progress.Report(new UiProgress { Message = "Creating container…", Indeterminate = true });
+                        progress.Report(new UiProgress { Message = "Creating container ", Indeterminate = true });
 
                         return await Task.Run(() =>
                         {
@@ -1197,7 +1198,7 @@ namespace HSTRYDoc
                     title: "Save container",
                     work: async (progress, token) =>
                     {
-                        progress.Report(new UiProgress { Message = "Saving container…", Indeterminate = true });
+                        progress.Report(new UiProgress { Message = "Saving container ", Indeterminate = true });
 
                         await Task.Run(() => _container.Save(_containerPath!), token);
                         return new object();
@@ -1248,7 +1249,7 @@ namespace HSTRYDoc
                     title: "Save container as",
                     work: async (progress, token) =>
                     {
-                        progress.Report(new UiProgress { Message = "Saving container…", Indeterminate = true });
+                        progress.Report(new UiProgress { Message = "Saving container ", Indeterminate = true });
 
                         await Task.Run(() => _container.Save(target), token);
                         return new object();
@@ -1465,7 +1466,10 @@ namespace HSTRYDoc
                 _currentBlockIndex = index;
                 _blockDirty = false;
 
+                ResetEditorScaleTo100();
+
                 UpdateRtfUiFromSelection();
+                
             }
             catch (Exception ex)
             {
@@ -1584,7 +1588,7 @@ namespace HSTRYDoc
                 {
                     string hashText = computeSync
                         ? Convert.ToHexString(_container.ComputeBlockHash(b))
-                        : "Computing…";
+                        : "Computing ";
 
                     string size = ByteFormat.ToHumanSize(b.StoredSizeBytes);
 
@@ -1683,7 +1687,7 @@ namespace HSTRYDoc
                             var it = lvwBlocks.Items[idx];
                             if (it.SubItems.Count < 2) continue;
 
-                            if (it.SubItems[1].Text == "Computing…" || string.IsNullOrWhiteSpace(it.SubItems[1].Text))
+                            if (it.SubItems[1].Text == "Computing " || string.IsNullOrWhiteSpace(it.SubItems[1].Text))
                                 it.SubItems[1].Text = hex;
                         }
                     }));
@@ -1715,7 +1719,7 @@ namespace HSTRYDoc
             _hashCts = new CancellationTokenSource();
             var token = _hashCts.Token;
 
-            item.SubItems[1].Text = "Computing…";
+            item.SubItems[1].Text = "Computing ";
 
             try
             {
@@ -1770,6 +1774,8 @@ namespace HSTRYDoc
                 rtfMainText.Clear();
                 _currentBlockIndex = -1;
                 _blockDirty = false;
+
+                ResetEditorScaleTo100();
             }
             finally
             {
@@ -1851,7 +1857,7 @@ namespace HSTRYDoc
                     {
                         progress.Report(new UiProgress
                         {
-                            Message = "Searching…",
+                            Message = "Searching ",
                             Maximum = _container.Blocks.Count,
                             Value = 0,
                             Indeterminate = false
@@ -1868,7 +1874,7 @@ namespace HSTRYDoc
 
                                 progress.Report(new UiProgress
                                 {
-                                    Message = $"Searching block {i + 1}/{_container.Blocks.Count}…",
+                                    Message = $"Searching block {i + 1}/{_container.Blocks.Count} ",
                                     Value = i + 1
                                 });
 
@@ -1959,8 +1965,8 @@ namespace HSTRYDoc
 
             static bool IsWordChar(char c) =>
                 char.IsLetterOrDigit(c) || c == '_' ||
-                c == 'Ä' || c == 'Ö' || c == 'Ü' ||
-                c == 'ä' || c == 'ö' || c == 'ü' || c == 'ß';
+                c == ' ' || c == ' ' || c == ' ' ||
+                c == ' ' || c == ' ' || c == ' ' || c == ' ';
 
             int left = idx - 1;
             int right = idx + needle.Length;
@@ -1976,8 +1982,8 @@ namespace HSTRYDoc
             int start = Math.Max(0, index - context);
             int end = Math.Min(text.Length, index + length + context);
             string snippet = text.Substring(start, end - start).Replace("\r", " ").Replace("\n", " ");
-            if (start > 0) snippet = "…" + snippet;
-            if (end < text.Length) snippet = snippet + "…";
+            if (start > 0) snippet = " " + snippet;
+            if (end < text.Length) snippet = snippet + " ";
             return snippet;
         }
 
@@ -3046,7 +3052,7 @@ namespace HSTRYDoc
                 title = $"{app} - [ {path} ]";
             }
 
-            // Wenn irgendetwas geändert wurde => Stern hinten dran
+            // Wenn irgendetwas ge ndert wurde => Stern hinten dran
             if (_containerDirty)
                 title += " *";
 
@@ -3274,6 +3280,139 @@ namespace HSTRYDoc
 
             UpdateUiState();
         }
+
+        private void toolButtonFontstyle_Click(object sender, EventArgs e)
+        {
+            Font current = rtfMainText.SelectionFont ?? rtfMainText.Font;
+
+            using var fd = new FontDialog
+            {
+                Font = current,
+                ShowColor = false,
+                ShowEffects = false,
+                FontMustExist = true,
+                MinSize = 1,
+                MaxSize = 200
+                // Note: dialog also shows size/style, but we will apply only the font family.
+            };
+
+            if (fd.ShowDialog(this) != DialogResult.OK)
+                return;
+
+            ApplySelectionFontFamily(rtfMainText, fd.Font.FontFamily);
+            UpdateRtfUiFromSelection();
+        }
+
+        // Preserves size + style; applies new family safely (also for mixed selection)
+        private static void ApplySelectionFontFamily(RichTextBox rtb, FontFamily newFamily)
+        {
+            int start = rtb.SelectionStart;
+            int len = rtb.SelectionLength;
+
+            // Cache fonts to reduce allocations in mixed selections
+            var cache = new Dictionary<(float Size, FontStyle Style), Font>();
+
+            Font GetCached(float size, FontStyle style)
+            {
+                var key = (Size: size, Style: style);
+                if (cache.TryGetValue(key, out var f))
+                    return f;
+
+                // Some families don't support all styles -> fallback safely
+                Font created;
+                try { created = new Font(newFamily, size, style); }
+                catch { created = new Font(newFamily, size, FontStyle.Regular); }
+
+                cache[key] = created;
+                return created;
+            }
+
+            if (len == 0)
+            {
+                Font baseFont = rtb.SelectionFont ?? rtb.Font;
+                rtb.SelectionFont = GetCached(baseFont.Size, baseFont.Style);
+                return;
+            }
+
+            // Uniform selection
+            if (rtb.SelectionFont != null)
+            {
+                Font f = rtb.SelectionFont;
+                rtb.SelectionFont = GetCached(f.Size, f.Style);
+                rtb.Select(start, len);
+                return;
+            }
+
+            // Mixed selection -> per-character
+            rtb.SuspendLayout();
+            try
+            {
+                for (int i = 0; i < len; i++)
+                {
+                    rtb.Select(start + i, 1);
+                    Font f = rtb.SelectionFont ?? rtb.Font;
+                    rtb.SelectionFont = GetCached(f.Size, f.Style);
+                }
+
+                rtb.Select(start, len);
+                rtb.Focus();
+            }
+            finally
+            {
+                rtb.ResumeLayout();
+            }
+        }
+
+        private void rtfScaleBar_Scroll(object sender, EventArgs e)
+        {
+            float z = rtfScaleBar.Value / 100f;
+            z = Math.Clamp(z, 0.1f, 64f);
+            rtfMainText.ZoomFactor = z;
+            lblScaleLabel.Text = $"{rtfScaleBar.Value}%";
+        }
+
+        private void btnResetScale_Click(object sender, EventArgs e)
+        {
+            // Reset to 100%
+            int reset = 100;
+
+            // keep within trackbar bounds (in case you changed min/max)
+            if (reset < rtfScaleBar.Minimum) reset = rtfScaleBar.Minimum;
+            if (reset > rtfScaleBar.Maximum) reset = rtfScaleBar.Maximum;
+
+            rtfScaleBar.Value = reset;
+
+            float z = reset / 100f;
+            z = Math.Clamp(z, 0.1f, 64f);
+            rtfMainText.ZoomFactor = z;
+
+            // optional:
+            lblScaleLabel.Text = $"{reset}%";
+        }
+
+        private void ApplyEditorZoomFromScaleBar()
+        {
+            float z = rtfScaleBar.Value / 100f;
+            z = Math.Clamp(z, 0.1f, 64f);
+
+            rtfMainText.ZoomFactor = z;
+            lblScaleLabel.Text = $"{rtfScaleBar.Value}%";
+        }
+
+        private void ResetEditorScaleTo100()
+        {
+            // Ensure 100 is within bounds
+            int reset = 100;
+            if (reset < rtfScaleBar.Minimum) reset = rtfScaleBar.Minimum;
+            if (reset > rtfScaleBar.Maximum) reset = rtfScaleBar.Maximum;
+
+            rtfScaleBar.Value = reset;
+            lblScaleLabel.Text = $"{reset}%";
+
+            // Apply zoom (may still be overwritten by RTF internally, but you're resetting anyway)
+            rtfMainText.ZoomFactor = 1.0f;
+        }
+
 
 
     }

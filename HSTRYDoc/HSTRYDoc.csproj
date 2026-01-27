@@ -6,13 +6,13 @@
     <Nullable>enable</Nullable>
     <UseWindowsForms>true</UseWindowsForms>
     <ImplicitUsings>enable</ImplicitUsings>
-    <ApplicationIcon>HstryDocu_HSTRY_multisize.ico</ApplicationIcon>
+    <ApplicationIcon>secure-document-multisize.ico</ApplicationIcon>
     <ApplicationHighDpiMode>SystemAware</ApplicationHighDpiMode>
     <ForceDesignerDpiUnaware>true</ForceDesignerDpiUnaware>
   </PropertyGroup>
 
   <ItemGroup>
-    <Content Include="HstryDocu_HSTRY_multisize.ico" />
+    <Content Include="secure-document-multisize.ico" />
   </ItemGroup>
 
   <ItemGroup>

@@ -66,11 +66,17 @@
             toolStripMenuItem5 = new ToolStripSeparator();
             forecolorToolStripMenuItem = new ToolStripMenuItem();
             textBackgroundcolorToolStripMenuItem = new ToolStripMenuItem();
+            pnlScales = new Panel();
+            panel3 = new Panel();
+            btnResetScale = new Button();
+            lblScaleLabel = new Label();
+            rtfScaleBar = new TrackBar();
             toolStripRtf = new ToolStrip();
             boldToolButton = new ToolStripButton();
             ItalicToolButton = new ToolStripButton();
             UnderlineToolButton = new ToolStripButton();
             StrikeTroughToolButton = new ToolStripButton();
+            toolButtonFontstyle = new ToolStripButton();
             toolStripSeparator2 = new ToolStripSeparator();
             FontSizeComboBox = new ToolStripComboBox();
             btnFontSizeMns = new ToolStripButton();
@@ -122,6 +128,9 @@
             ctxBlocks.SuspendLayout();
             panel1.SuspendLayout();
             ctxRtf.SuspendLayout();
+            pnlScales.SuspendLayout();
+            panel3.SuspendLayout();
+            ((System.ComponentModel.ISupportInitialize)rtfScaleBar).BeginInit();
             toolStripRtf.SuspendLayout();
             mainMenu.SuspendLayout();
             SuspendLayout();
@@ -132,7 +141,7 @@
             mainToolstrip.Items.AddRange(new ToolStripItem[] { newBlockToolStripButton, openContainerToolStripButton, saveContainerToolStripButton, toolStripSeparator, hilfeToolStripButton, toolStripSeparator5, btnTestblocks });
             mainToolstrip.Location = new Point(0, 24);
             mainToolstrip.Name = "mainToolstrip";
-            mainToolstrip.Size = new Size(1022, 27);
+            mainToolstrip.Size = new Size(1063, 27);
             mainToolstrip.TabIndex = 1;
             mainToolstrip.Text = "toolStrip1";
             // 
@@ -202,7 +211,7 @@
             statusStrip1.Items.AddRange(new ToolStripItem[] { ContainerSizeLabel });
             statusStrip1.Location = new Point(0, 638);
             statusStrip1.Name = "statusStrip1";
-            statusStrip1.Size = new Size(1022, 22);
+            statusStrip1.Size = new Size(1063, 22);
             statusStrip1.TabIndex = 2;
             statusStrip1.Text = "statusStrip1";
             // 
@@ -228,8 +237,8 @@
             splitContainer1.Panel2.Controls.Add(panel1);
             splitContainer1.Panel2.Controls.Add(toolStripRtf);
             splitContainer1.Panel2.Enabled = false;
-            splitContainer1.Size = new Size(1022, 587);
-            splitContainer1.SplitterDistance = 403;
+            splitContainer1.Size = new Size(1063, 587);
+            splitContainer1.SplitterDistance = 419;
             splitContainer1.TabIndex = 3;
             // 
             // lvwBlocks
@@ -243,7 +252,7 @@
             lvwBlocks.Location = new Point(0, 0);
             lvwBlocks.MultiSelect = false;
             lvwBlocks.Name = "lvwBlocks";
-            lvwBlocks.Size = new Size(403, 587);
+            lvwBlocks.Size = new Size(419, 587);
             lvwBlocks.TabIndex = 0;
             lvwBlocks.UseCompatibleStateImageBehavior = false;
             lvwBlocks.View = View.Details;
@@ -302,11 +311,12 @@
             panel1.BackColor = Color.SlateGray;
             panel1.BorderStyle = BorderStyle.FixedSingle;
             panel1.Controls.Add(rtfMainText);
+            panel1.Controls.Add(pnlScales);
             panel1.Dock = DockStyle.Fill;
             panel1.Location = new Point(0, 27);
             panel1.Name = "panel1";
             panel1.Padding = new Padding(8, 20, 8, 20);
-            panel1.Size = new Size(615, 560);
+            panel1.Size = new Size(640, 560);
             panel1.TabIndex = 2;
             // 
             // rtfMainText
@@ -314,9 +324,10 @@
             rtfMainText.BorderStyle = BorderStyle.None;
             rtfMainText.ContextMenuStrip = ctxRtf;
             rtfMainText.Dock = DockStyle.Fill;
+            rtfMainText.EnableAutoDragDrop = true;
             rtfMainText.Location = new Point(8, 20);
             rtfMainText.Name = "rtfMainText";
-            rtfMainText.Size = new Size(597, 518);
+            rtfMainText.Size = new Size(622, 473);
             rtfMainText.TabIndex = 0;
             rtfMainText.Text = "";
             // 
@@ -411,13 +422,73 @@
             textBackgroundcolorToolStripMenuItem.Size = new Size(195, 26);
             textBackgroundcolorToolStripMenuItem.Text = "Text-Backgroundcolor";
             // 
+            // pnlScales
+            // 
+            pnlScales.Controls.Add(panel3);
+            pnlScales.Controls.Add(rtfScaleBar);
+            pnlScales.Dock = DockStyle.Bottom;
+            pnlScales.Location = new Point(8, 493);
+            pnlScales.Name = "pnlScales";
+            pnlScales.Size = new Size(622, 45);
+            pnlScales.TabIndex = 2;
+            // 
+            // panel3
+            // 
+            panel3.Controls.Add(btnResetScale);
+            panel3.Controls.Add(lblScaleLabel);
+            panel3.Dock = DockStyle.Fill;
+            panel3.Location = new Point(0, 0);
+            panel3.Name = "panel3";
+            panel3.Size = new Size(204, 45);
+            panel3.TabIndex = 2;
+            // 
+            // btnResetScale
+            // 
+            btnResetScale.Dock = DockStyle.Fill;
+            btnResetScale.FlatStyle = FlatStyle.Flat;
+            btnResetScale.Location = new Point(101, 0);
+            btnResetScale.Name = "btnResetScale";
+            btnResetScale.Size = new Size(103, 45);
+            btnResetScale.TabIndex = 1;
+            btnResetScale.Text = "Reset Scale";
+            btnResetScale.UseVisualStyleBackColor = true;
+            btnResetScale.Click += btnResetScale_Click;
+            // 
+            // lblScaleLabel
+            // 
+            lblScaleLabel.Dock = DockStyle.Left;
+            lblScaleLabel.Font = new Font("Segoe UI Semibold", 9.75F, FontStyle.Bold, GraphicsUnit.Point, 0);
+            lblScaleLabel.ForeColor = Color.White;
+            lblScaleLabel.Location = new Point(0, 0);
+            lblScaleLabel.Name = "lblScaleLabel";
+            lblScaleLabel.Size = new Size(101, 45);
+            lblScaleLabel.TabIndex = 0;
+            lblScaleLabel.Text = "100%";
+            lblScaleLabel.TextAlign = ContentAlignment.MiddleCenter;
+            // 
+            // rtfScaleBar
+            // 
+            rtfScaleBar.Dock = DockStyle.Right;
+            rtfScaleBar.LargeChange = 25;
+            rtfScaleBar.Location = new Point(204, 0);
+            rtfScaleBar.Maximum = 400;
+            rtfScaleBar.Minimum = 25;
+            rtfScaleBar.Name = "rtfScaleBar";
+            rtfScaleBar.Size = new Size(418, 45);
+            rtfScaleBar.SmallChange = 5;
+            rtfScaleBar.TabIndex = 1;
+            rtfScaleBar.TickFrequency = 25;
+            rtfScaleBar.TickStyle = TickStyle.Both;
+            rtfScaleBar.Value = 100;
+            rtfScaleBar.Scroll += rtfScaleBar_Scroll;
+            // 
             // toolStripRtf
             // 
             toolStripRtf.ImageScalingSize = new Size(20, 20);
-            toolStripRtf.Items.AddRange(new ToolStripItem[] { boldToolButton, ItalicToolButton, UnderlineToolButton, StrikeTroughToolButton, toolStripSeparator2, FontSizeComboBox, btnFontSizeMns, btnFontSizePls, toolButtonAlignLeft, toolButtonAlignCenter, toolButtonAlignRight, dropDownHeader, toolStripSeparator3, toolStripButtonBullets, toolButtonBulletsNumeric, foreColorToolButton, backgroundColorToolButton, toolTableInsert, toolStripSeparator4, toolButtonCopy, toolButtonPaste, toolButtonCut, toolStripSeparator1, toolButtonSelectAll });
+            toolStripRtf.Items.AddRange(new ToolStripItem[] { boldToolButton, ItalicToolButton, UnderlineToolButton, StrikeTroughToolButton, toolButtonFontstyle, toolStripSeparator2, FontSizeComboBox, btnFontSizeMns, btnFontSizePls, toolButtonAlignLeft, toolButtonAlignCenter, toolButtonAlignRight, dropDownHeader, toolStripSeparator3, toolStripButtonBullets, toolButtonBulletsNumeric, foreColorToolButton, backgroundColorToolButton, toolTableInsert, toolStripSeparator4, toolButtonCopy, toolButtonPaste, toolButtonCut, toolStripSeparator1, toolButtonSelectAll });
             toolStripRtf.Location = new Point(0, 0);
             toolStripRtf.Name = "toolStripRtf";
-            toolStripRtf.Size = new Size(615, 27);
+            toolStripRtf.Size = new Size(640, 27);
             toolStripRtf.TabIndex = 1;
             toolStripRtf.Text = "toolStrip1";
             // 
@@ -456,6 +527,16 @@
             StrikeTroughToolButton.Name = "StrikeTroughToolButton";
             StrikeTroughToolButton.Size = new Size(24, 24);
             StrikeTroughToolButton.Text = "Striketrough";
+            // 
+            // toolButtonFontstyle
+            // 
+            toolButtonFontstyle.DisplayStyle = ToolStripItemDisplayStyle.Image;
+            toolButtonFontstyle.Image = (Image)resources.GetObject("toolButtonFontstyle.Image");
+            toolButtonFontstyle.ImageTransparentColor = Color.Magenta;
+            toolButtonFontstyle.Name = "toolButtonFontstyle";
+            toolButtonFontstyle.Size = new Size(24, 24);
+            toolButtonFontstyle.Text = "Choose Font...";
+            toolButtonFontstyle.Click += toolButtonFontstyle_Click;
             // 
             // toolStripSeparator2
             // 
@@ -660,7 +741,7 @@
             mainMenu.Items.AddRange(new ToolStripItem[] { fileToolStripMenuItem, toolsToolStripMenuItem, helpToolStripMenuItem });
             mainMenu.Location = new Point(0, 0);
             mainMenu.Name = "mainMenu";
-            mainMenu.Size = new Size(1022, 24);
+            mainMenu.Size = new Size(1063, 24);
             mainMenu.TabIndex = 4;
             mainMenu.Text = "menuStrip1";
             // 
@@ -735,14 +816,14 @@
             // 
             searchInBlockToolStripMenuItem.Image = (Image)resources.GetObject("searchInBlockToolStripMenuItem.Image");
             searchInBlockToolStripMenuItem.Name = "searchInBlockToolStripMenuItem";
-            searchInBlockToolStripMenuItem.Size = new Size(229, 26);
+            searchInBlockToolStripMenuItem.Size = new Size(225, 22);
             searchInBlockToolStripMenuItem.Text = "Search in Block...";
             // 
             // searchInContainerToolStripMenuItem
             // 
             searchInContainerToolStripMenuItem.Image = (Image)resources.GetObject("searchInContainerToolStripMenuItem.Image");
             searchInContainerToolStripMenuItem.Name = "searchInContainerToolStripMenuItem";
-            searchInContainerToolStripMenuItem.Size = new Size(229, 26);
+            searchInContainerToolStripMenuItem.Size = new Size(225, 22);
             searchInContainerToolStripMenuItem.Text = "Search in Container...";
             // 
             // keyManagementToolStripMenuItem
@@ -750,7 +831,7 @@
             keyManagementToolStripMenuItem.DropDownItems.AddRange(new ToolStripItem[] { keyLookupExternalDriveToolStripMenuItem });
             keyManagementToolStripMenuItem.Image = (Image)resources.GetObject("keyManagementToolStripMenuItem.Image");
             keyManagementToolStripMenuItem.Name = "keyManagementToolStripMenuItem";
-            keyManagementToolStripMenuItem.Size = new Size(229, 26);
+            keyManagementToolStripMenuItem.Size = new Size(225, 22);
             keyManagementToolStripMenuItem.Text = "Key Management";
             keyManagementToolStripMenuItem.Click += keyManagementToolStripMenuItem_Click;
             // 
@@ -765,7 +846,7 @@
             // 
             dataMasksToolStripMenuItem.Image = (Image)resources.GetObject("dataMasksToolStripMenuItem.Image");
             dataMasksToolStripMenuItem.Name = "dataMasksToolStripMenuItem";
-            dataMasksToolStripMenuItem.Size = new Size(229, 26);
+            dataMasksToolStripMenuItem.Size = new Size(225, 22);
             dataMasksToolStripMenuItem.Text = "Defined Data Management...";
             dataMasksToolStripMenuItem.Click += dataMasksToolStripMenuItem_Click;
             // 
@@ -794,7 +875,7 @@
             // 
             AutoScaleDimensions = new SizeF(7F, 15F);
             AutoScaleMode = AutoScaleMode.Font;
-            ClientSize = new Size(1022, 660);
+            ClientSize = new Size(1063, 660);
             Controls.Add(splitContainer1);
             Controls.Add(statusStrip1);
             Controls.Add(mainToolstrip);
@@ -816,6 +897,10 @@
             ctxBlocks.ResumeLayout(false);
             panel1.ResumeLayout(false);
             ctxRtf.ResumeLayout(false);
+            pnlScales.ResumeLayout(false);
+            pnlScales.PerformLayout();
+            panel3.ResumeLayout(false);
+            ((System.ComponentModel.ISupportInitialize)rtfScaleBar).EndInit();
             toolStripRtf.ResumeLayout(false);
             toolStripRtf.PerformLayout();
             mainMenu.ResumeLayout(false);
@@ -908,5 +993,11 @@
         private ToolStripSeparator toolStripSeparator5;
         private ToolStripMenuItem keyLookupExternalDriveToolStripMenuItem;
         private ToolStripMenuItem dataMasksToolStripMenuItem;
+        private ToolStripButton toolButtonFontstyle;
+        private TrackBar rtfScaleBar;
+        private Panel pnlScales;
+        private Panel panel3;
+        private Button btnResetScale;
+        private Label lblScaleLabel;
     }
 }
