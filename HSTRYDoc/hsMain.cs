@@ -1268,6 +1268,7 @@ namespace HSTRYDoc
             newBlockToolStripMenuItem.Enabled = hasContainer;
 
             renameBlockToolStripMenuItem.Enabled = hasContainer && _currentBlockIndex >= 0;
+            removeBlockToolStripMenuItem.Enabled = hasContainer && _currentBlockIndex >= 0;
 
             ContainerSizeLabel.Visible = hasContainer;
             ContainerSizeLabel.Text = hasContainer
@@ -3341,7 +3342,7 @@ namespace HSTRYDoc
         private void UpdateWindowTitle()
         {
             // Du kannst hier Global.AppName nutzen, falls das bereits "HstryDocu" ist:
-            string app = Global.AppName; // oder: "HstryDocu";
+            string app = $"{Global.AppName} v{Global.AppVersion}"; // oder: "HstryDocu";
 
             // Wenn ein Container offen ist, zeige den Pfad in [ ... ]
             string title = app;

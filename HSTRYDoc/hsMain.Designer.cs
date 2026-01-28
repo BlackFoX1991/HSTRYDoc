@@ -315,25 +315,24 @@
             panel1.Dock = DockStyle.Fill;
             panel1.Location = new Point(0, 27);
             panel1.Name = "panel1";
-            panel1.Padding = new Padding(3);
+            panel1.Padding = new Padding(15);
             panel1.Size = new Size(640, 560);
             panel1.TabIndex = 2;
             // 
             // mainshadowPanel
             // 
             mainshadowPanel.BackColor = Color.Transparent;
-            mainshadowPanel.BorderStyle = BorderStyle.FixedSingle;
             mainshadowPanel.Controls.Add(rtfMainText);
             mainshadowPanel.Controls.Add(pnlScales);
             mainshadowPanel.Dock = DockStyle.Fill;
-            mainshadowPanel.Location = new Point(3, 3);
+            mainshadowPanel.Location = new Point(15, 15);
             mainshadowPanel.MaxAlpha = 140;
             mainshadowPanel.Name = "mainshadowPanel";
-            mainshadowPanel.Padding = new Padding(0, 0, 7, 7);
+            mainshadowPanel.Padding = new Padding(5, 5, 7, 7);
             mainshadowPanel.ShadowOffsetX = 2;
             mainshadowPanel.ShadowOffsetY = 2;
             mainshadowPanel.ShadowSize = 5;
-            mainshadowPanel.Size = new Size(632, 552);
+            mainshadowPanel.Size = new Size(608, 528);
             mainshadowPanel.TabIndex = 3;
             // 
             // rtfMainText
@@ -342,9 +341,9 @@
             rtfMainText.ContextMenuStrip = ctxRtf;
             rtfMainText.Dock = DockStyle.Fill;
             rtfMainText.EnableAutoDragDrop = true;
-            rtfMainText.Location = new Point(0, 0);
+            rtfMainText.Location = new Point(5, 5);
             rtfMainText.Name = "rtfMainText";
-            rtfMainText.Size = new Size(623, 521);
+            rtfMainText.Size = new Size(596, 494);
             rtfMainText.TabIndex = 0;
             rtfMainText.Text = "";
             // 
@@ -444,9 +443,9 @@
             pnlScales.Controls.Add(rtfScaleBar);
             pnlScales.Controls.Add(panel3);
             pnlScales.Dock = DockStyle.Bottom;
-            pnlScales.Location = new Point(0, 521);
+            pnlScales.Location = new Point(5, 499);
             pnlScales.Name = "pnlScales";
-            pnlScales.Size = new Size(623, 22);
+            pnlScales.Size = new Size(596, 22);
             pnlScales.TabIndex = 2;
             // 
             // rtfScaleBar
@@ -455,7 +454,7 @@
             rtfScaleBar.BackColor = Color.White;
             rtfScaleBar.Dock = DockStyle.Right;
             rtfScaleBar.LargeChange = 25;
-            rtfScaleBar.Location = new Point(357, 0);
+            rtfScaleBar.Location = new Point(330, 0);
             rtfScaleBar.Maximum = 400;
             rtfScaleBar.Minimum = 25;
             rtfScaleBar.Name = "rtfScaleBar";
@@ -489,7 +488,6 @@
             // 
             // lblScaleLabel
             // 
-            lblScaleLabel.BorderStyle = BorderStyle.FixedSingle;
             lblScaleLabel.Dock = DockStyle.Left;
             lblScaleLabel.Font = new Font("Segoe UI Semibold", 9.75F, FontStyle.Bold, GraphicsUnit.Point, 0);
             lblScaleLabel.ForeColor = Color.Black;
@@ -834,14 +832,14 @@
             // 
             searchInBlockToolStripMenuItem.Image = (Image)resources.GetObject("searchInBlockToolStripMenuItem.Image");
             searchInBlockToolStripMenuItem.Name = "searchInBlockToolStripMenuItem";
-            searchInBlockToolStripMenuItem.Size = new Size(190, 26);
+            searchInBlockToolStripMenuItem.Size = new Size(186, 22);
             searchInBlockToolStripMenuItem.Text = "Search in Block...";
             // 
             // searchInContainerToolStripMenuItem
             // 
             searchInContainerToolStripMenuItem.Image = (Image)resources.GetObject("searchInContainerToolStripMenuItem.Image");
             searchInContainerToolStripMenuItem.Name = "searchInContainerToolStripMenuItem";
-            searchInContainerToolStripMenuItem.Size = new Size(190, 26);
+            searchInContainerToolStripMenuItem.Size = new Size(186, 22);
             searchInContainerToolStripMenuItem.Text = "Search in Container...";
             // 
             // keyManagementToolStripMenuItem
@@ -849,7 +847,7 @@
             keyManagementToolStripMenuItem.DropDownItems.AddRange(new ToolStripItem[] { keyLookupExternalDriveToolStripMenuItem });
             keyManagementToolStripMenuItem.Image = (Image)resources.GetObject("keyManagementToolStripMenuItem.Image");
             keyManagementToolStripMenuItem.Name = "keyManagementToolStripMenuItem";
-            keyManagementToolStripMenuItem.Size = new Size(190, 26);
+            keyManagementToolStripMenuItem.Size = new Size(186, 22);
             keyManagementToolStripMenuItem.Text = "Key Management";
             keyManagementToolStripMenuItem.Click += keyManagementToolStripMenuItem_Click;
             // 
@@ -871,7 +869,7 @@
             // 
             aboutToolStripMenuItem.Image = (Image)resources.GetObject("aboutToolStripMenuItem.Image");
             aboutToolStripMenuItem.Name = "aboutToolStripMenuItem";
-            aboutToolStripMenuItem.Size = new Size(184, 26);
+            aboutToolStripMenuItem.Size = new Size(116, 22);
             aboutToolStripMenuItem.Text = "About...";
             aboutToolStripMenuItem.Click += aboutToolStripMenuItem_Click;
             // 

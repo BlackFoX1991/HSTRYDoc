@@ -75,7 +75,6 @@ namespace HSTRYDoc
             lblMyRecipientStatusCaption = new Label();
             lblMyRecipientStatus = new Label();
             btnAddMyself = new Button();
-
             grpRecipients = new GroupBox();
             lvwRecipients = new ListView();
             colKeyId = new ColumnHeader();
@@ -86,28 +85,23 @@ namespace HSTRYDoc
             btnRemoveRecipient = new Button();
             btnCopyKeyId = new Button();
             lblDropHint = new Label();
-
             grpBlockAccess = new GroupBox();
             lblBlockAccessHint = new Label();
             lvwBlocks = new ListView();
             colBlockIndex = new ColumnHeader();
             colBlockTitle = new ColumnHeader();
             colBlockRights = new ColumnHeader();
-
             btnGrantRead = new Button();
             btnGrantWrite = new Button();
             btnRevokeAccess = new Button();
             btnGrantReadAll = new Button();
             btnRevokeAll = new Button();
-
             btnOk = new Button();
             btnCancel = new Button();
-
             grpMyKeys.SuspendLayout();
             grpRecipients.SuspendLayout();
             grpBlockAccess.SuspendLayout();
             SuspendLayout();
-
             // 
             // grpMyKeys
             // 
@@ -122,11 +116,9 @@ namespace HSTRYDoc
             grpMyKeys.Controls.Add(lblMyRecipientStatusCaption);
             grpMyKeys.Controls.Add(lblMyRecipientStatus);
             grpMyKeys.Controls.Add(btnAddMyself);
-            grpMyKeys.Location = new Point(14, 16);
-            grpMyKeys.Margin = new Padding(3, 4, 3, 4);
+            grpMyKeys.Location = new Point(12, 12);
             grpMyKeys.Name = "grpMyKeys";
-            grpMyKeys.Padding = new Padding(3, 4, 3, 4);
-            grpMyKeys.Size = new Size(869, 237);
+            grpMyKeys.Size = new Size(760, 178);
             grpMyKeys.TabIndex = 0;
             grpMyKeys.TabStop = false;
             grpMyKeys.Text = "My keys";
@@ -134,57 +126,52 @@ namespace HSTRYDoc
             // lblPrivPath
             // 
             lblPrivPath.AutoSize = true;
-            lblPrivPath.Location = new Point(18, 37);
+            lblPrivPath.Location = new Point(16, 28);
             lblPrivPath.Name = "lblPrivPath";
-            lblPrivPath.Size = new Size(108, 20);
+            lblPrivPath.Size = new Size(86, 15);
             lblPrivPath.TabIndex = 0;
             lblPrivPath.Text = "Private key file:";
             // 
             // txtPrivateKeyPath
             // 
-            txtPrivateKeyPath.Location = new Point(130, 33);
-            txtPrivateKeyPath.Margin = new Padding(3, 4, 3, 4);
+            txtPrivateKeyPath.Location = new Point(114, 25);
             txtPrivateKeyPath.Name = "txtPrivateKeyPath";
             txtPrivateKeyPath.ReadOnly = true;
-            txtPrivateKeyPath.Size = new Size(596, 27);
+            txtPrivateKeyPath.Size = new Size(522, 23);
             txtPrivateKeyPath.TabIndex = 1;
             // 
             // btnBrowsePriv
             // 
-            btnBrowsePriv.Location = new Point(734, 32);
-            btnBrowsePriv.Margin = new Padding(3, 4, 3, 4);
+            btnBrowsePriv.Location = new Point(642, 24);
             btnBrowsePriv.Name = "btnBrowsePriv";
-            btnBrowsePriv.Size = new Size(114, 33);
+            btnBrowsePriv.Size = new Size(100, 25);
             btnBrowsePriv.TabIndex = 2;
             btnBrowsePriv.Text = "Browse...";
             btnBrowsePriv.UseVisualStyleBackColor = true;
             // 
             // btnCreateKeyPair
             // 
-            btnCreateKeyPair.Location = new Point(130, 72);
-            btnCreateKeyPair.Margin = new Padding(3, 4, 3, 4);
+            btnCreateKeyPair.Location = new Point(114, 54);
             btnCreateKeyPair.Name = "btnCreateKeyPair";
-            btnCreateKeyPair.Size = new Size(206, 36);
+            btnCreateKeyPair.Size = new Size(180, 27);
             btnCreateKeyPair.TabIndex = 3;
             btnCreateKeyPair.Text = "Create key pair...";
             btnCreateKeyPair.UseVisualStyleBackColor = true;
             // 
             // btnExportPublic
             // 
-            btnExportPublic.Location = new Point(343, 72);
-            btnExportPublic.Margin = new Padding(3, 4, 3, 4);
+            btnExportPublic.Location = new Point(300, 54);
             btnExportPublic.Name = "btnExportPublic";
-            btnExportPublic.Size = new Size(194, 36);
+            btnExportPublic.Size = new Size(170, 27);
             btnExportPublic.TabIndex = 4;
             btnExportPublic.Text = "Export public key...";
             btnExportPublic.UseVisualStyleBackColor = true;
             // 
             // btnTransferOwnership
             // 
-            btnTransferOwnership.Location = new Point(544, 72);
-            btnTransferOwnership.Margin = new Padding(3, 4, 3, 4);
+            btnTransferOwnership.Location = new Point(476, 54);
             btnTransferOwnership.Name = "btnTransferOwnership";
-            btnTransferOwnership.Size = new Size(194, 36);
+            btnTransferOwnership.Size = new Size(170, 27);
             btnTransferOwnership.TabIndex = 5;
             btnTransferOwnership.Text = "Transfer ownership...";
             btnTransferOwnership.UseVisualStyleBackColor = true;
@@ -192,45 +179,43 @@ namespace HSTRYDoc
             // lblMyKeyIdCaption
             // 
             lblMyKeyIdCaption.AutoSize = true;
-            lblMyKeyIdCaption.Location = new Point(18, 129);
+            lblMyKeyIdCaption.Location = new Point(16, 97);
             lblMyKeyIdCaption.Name = "lblMyKeyIdCaption";
-            lblMyKeyIdCaption.Size = new Size(55, 20);
+            lblMyKeyIdCaption.Size = new Size(43, 15);
             lblMyKeyIdCaption.TabIndex = 6;
             lblMyKeyIdCaption.Text = "Key ID:";
             // 
             // txtMyKeyId
             // 
-            txtMyKeyId.Location = new Point(130, 125);
-            txtMyKeyId.Margin = new Padding(3, 4, 3, 4);
+            txtMyKeyId.Location = new Point(114, 94);
             txtMyKeyId.Name = "txtMyKeyId";
             txtMyKeyId.ReadOnly = true;
-            txtMyKeyId.Size = new Size(717, 27);
+            txtMyKeyId.Size = new Size(628, 23);
             txtMyKeyId.TabIndex = 7;
             // 
             // lblMyRecipientStatusCaption
             // 
             lblMyRecipientStatusCaption.AutoSize = true;
-            lblMyRecipientStatusCaption.Location = new Point(18, 171);
+            lblMyRecipientStatusCaption.Location = new Point(16, 128);
             lblMyRecipientStatusCaption.Name = "lblMyRecipientStatusCaption";
-            lblMyRecipientStatusCaption.Size = new Size(52, 20);
+            lblMyRecipientStatusCaption.Size = new Size(42, 15);
             lblMyRecipientStatusCaption.TabIndex = 8;
             lblMyRecipientStatusCaption.Text = "Status:";
             // 
             // lblMyRecipientStatus
             // 
             lblMyRecipientStatus.AutoSize = true;
-            lblMyRecipientStatus.Location = new Point(130, 171);
+            lblMyRecipientStatus.Location = new Point(114, 128);
             lblMyRecipientStatus.Name = "lblMyRecipientStatus";
-            lblMyRecipientStatus.Size = new Size(156, 20);
+            lblMyRecipientStatus.Size = new Size(122, 15);
             lblMyRecipientStatus.TabIndex = 9;
             lblMyRecipientStatus.Text = "No private key loaded";
             // 
             // btnAddMyself
             // 
-            btnAddMyself.Location = new Point(734, 164);
-            btnAddMyself.Margin = new Padding(3, 4, 3, 4);
+            btnAddMyself.Location = new Point(642, 123);
             btnAddMyself.Name = "btnAddMyself";
-            btnAddMyself.Size = new Size(114, 36);
+            btnAddMyself.Size = new Size(100, 27);
             btnAddMyself.TabIndex = 10;
             btnAddMyself.Text = "Add myself";
             btnAddMyself.UseVisualStyleBackColor = true;
@@ -242,11 +227,9 @@ namespace HSTRYDoc
             grpRecipients.Controls.Add(btnRemoveRecipient);
             grpRecipients.Controls.Add(btnCopyKeyId);
             grpRecipients.Controls.Add(lblDropHint);
-            grpRecipients.Location = new Point(14, 261);
-            grpRecipients.Margin = new Padding(3, 4, 3, 4);
+            grpRecipients.Location = new Point(12, 196);
             grpRecipients.Name = "grpRecipients";
-            grpRecipients.Padding = new Padding(3, 4, 3, 4);
-            grpRecipients.Size = new Size(869, 255);
+            grpRecipients.Size = new Size(760, 191);
             grpRecipients.TabIndex = 1;
             grpRecipients.TabStop = false;
             grpRecipients.Text = "Recipients";
@@ -256,11 +239,10 @@ namespace HSTRYDoc
             lvwRecipients.Columns.AddRange(new ColumnHeader[] { colKeyId, colAlg, colWrappedLen, colSpkiLen });
             lvwRecipients.FullRowSelect = true;
             lvwRecipients.GridLines = true;
-            lvwRecipients.Location = new Point(18, 32);
-            lvwRecipients.Margin = new Padding(3, 4, 3, 4);
+            lvwRecipients.Location = new Point(16, 24);
             lvwRecipients.MultiSelect = false;
             lvwRecipients.Name = "lvwRecipients";
-            lvwRecipients.Size = new Size(829, 160);
+            lvwRecipients.Size = new Size(726, 121);
             lvwRecipients.TabIndex = 0;
             lvwRecipients.UseCompatibleStateImageBehavior = false;
             lvwRecipients.View = View.Details;
@@ -287,30 +269,27 @@ namespace HSTRYDoc
             // 
             // btnAddRecipient
             // 
-            btnAddRecipient.Location = new Point(18, 207);
-            btnAddRecipient.Margin = new Padding(3, 4, 3, 4);
+            btnAddRecipient.Location = new Point(16, 155);
             btnAddRecipient.Name = "btnAddRecipient";
-            btnAddRecipient.Size = new Size(160, 36);
+            btnAddRecipient.Size = new Size(140, 27);
             btnAddRecipient.TabIndex = 1;
             btnAddRecipient.Text = "Add recipient...";
             btnAddRecipient.UseVisualStyleBackColor = true;
             // 
             // btnRemoveRecipient
             // 
-            btnRemoveRecipient.Location = new Point(185, 207);
-            btnRemoveRecipient.Margin = new Padding(3, 4, 3, 4);
+            btnRemoveRecipient.Location = new Point(162, 155);
             btnRemoveRecipient.Name = "btnRemoveRecipient";
-            btnRemoveRecipient.Size = new Size(160, 36);
+            btnRemoveRecipient.Size = new Size(140, 27);
             btnRemoveRecipient.TabIndex = 2;
             btnRemoveRecipient.Text = "Remove selected";
             btnRemoveRecipient.UseVisualStyleBackColor = true;
             // 
             // btnCopyKeyId
             // 
-            btnCopyKeyId.Location = new Point(352, 207);
-            btnCopyKeyId.Margin = new Padding(3, 4, 3, 4);
+            btnCopyKeyId.Location = new Point(308, 155);
             btnCopyKeyId.Name = "btnCopyKeyId";
-            btnCopyKeyId.Size = new Size(160, 36);
+            btnCopyKeyId.Size = new Size(140, 27);
             btnCopyKeyId.TabIndex = 3;
             btnCopyKeyId.Text = "Copy Key ID";
             btnCopyKeyId.UseVisualStyleBackColor = true;
@@ -318,9 +297,9 @@ namespace HSTRYDoc
             // lblDropHint
             // 
             lblDropHint.AutoSize = true;
-            lblDropHint.Location = new Point(523, 215);
+            lblDropHint.Location = new Point(458, 161);
             lblDropHint.Name = "lblDropHint";
-            lblDropHint.Size = new Size(316, 20);
+            lblDropHint.Size = new Size(252, 15);
             lblDropHint.TabIndex = 4;
             lblDropHint.Text = "Tip: Drag and drop .hstrypub files onto the list.";
             // 
@@ -333,11 +312,9 @@ namespace HSTRYDoc
             grpBlockAccess.Controls.Add(btnRevokeAccess);
             grpBlockAccess.Controls.Add(btnGrantReadAll);
             grpBlockAccess.Controls.Add(btnRevokeAll);
-            grpBlockAccess.Location = new Point(14, 524);
-            grpBlockAccess.Margin = new Padding(3, 4, 3, 4);
+            grpBlockAccess.Location = new Point(12, 393);
             grpBlockAccess.Name = "grpBlockAccess";
-            grpBlockAccess.Padding = new Padding(3, 4, 3, 4);
-            grpBlockAccess.Size = new Size(869, 177);
+            grpBlockAccess.Size = new Size(760, 229);
             grpBlockAccess.TabIndex = 2;
             grpBlockAccess.TabStop = false;
             grpBlockAccess.Text = "Block access (V4)";
@@ -345,9 +322,9 @@ namespace HSTRYDoc
             // lblBlockAccessHint
             // 
             lblBlockAccessHint.AutoSize = true;
-            lblBlockAccessHint.Location = new Point(18, 26);
+            lblBlockAccessHint.Location = new Point(16, 20);
             lblBlockAccessHint.Name = "lblBlockAccessHint";
-            lblBlockAccessHint.Size = new Size(364, 20);
+            lblBlockAccessHint.Size = new Size(286, 15);
             lblBlockAccessHint.TabIndex = 0;
             lblBlockAccessHint.Text = "Select a recipient above to view and edit block rights.";
             // 
@@ -356,11 +333,9 @@ namespace HSTRYDoc
             lvwBlocks.Columns.AddRange(new ColumnHeader[] { colBlockIndex, colBlockTitle, colBlockRights });
             lvwBlocks.FullRowSelect = true;
             lvwBlocks.GridLines = true;
-            lvwBlocks.Location = new Point(18, 50);
-            lvwBlocks.Margin = new Padding(3, 4, 3, 4);
-            lvwBlocks.MultiSelect = true;
+            lvwBlocks.Location = new Point(16, 38);
             lvwBlocks.Name = "lvwBlocks";
-            lvwBlocks.Size = new Size(629, 80);
+            lvwBlocks.Size = new Size(551, 154);
             lvwBlocks.TabIndex = 1;
             lvwBlocks.UseCompatibleStateImageBehavior = false;
             lvwBlocks.View = View.Details;
@@ -382,70 +357,63 @@ namespace HSTRYDoc
             // 
             // btnGrantRead
             // 
-            btnGrantRead.Location = new Point(658, 50);
-            btnGrantRead.Margin = new Padding(3, 4, 3, 4);
+            btnGrantRead.Location = new Point(576, 38);
             btnGrantRead.Name = "btnGrantRead";
-            btnGrantRead.Size = new Size(190, 33);
+            btnGrantRead.Size = new Size(166, 25);
             btnGrantRead.TabIndex = 2;
             btnGrantRead.Text = "Grant read (selected)";
             btnGrantRead.UseVisualStyleBackColor = true;
             // 
             // btnGrantWrite
             // 
-            btnGrantWrite.Location = new Point(658, 89);
-            btnGrantWrite.Margin = new Padding(3, 4, 3, 4);
+            btnGrantWrite.Location = new Point(576, 67);
             btnGrantWrite.Name = "btnGrantWrite";
-            btnGrantWrite.Size = new Size(190, 33);
+            btnGrantWrite.Size = new Size(166, 25);
             btnGrantWrite.TabIndex = 3;
             btnGrantWrite.Text = "Grant write (all)";
             btnGrantWrite.UseVisualStyleBackColor = true;
             // 
             // btnRevokeAccess
             // 
-            btnRevokeAccess.Location = new Point(658, 128);
-            btnRevokeAccess.Margin = new Padding(3, 4, 3, 4);
+            btnRevokeAccess.Location = new Point(576, 96);
             btnRevokeAccess.Name = "btnRevokeAccess";
-            btnRevokeAccess.Size = new Size(190, 33);
+            btnRevokeAccess.Size = new Size(166, 25);
             btnRevokeAccess.TabIndex = 4;
             btnRevokeAccess.Text = "Revoke (selected)";
             btnRevokeAccess.UseVisualStyleBackColor = true;
             // 
             // btnGrantReadAll
             // 
-            btnGrantReadAll.Location = new Point(18, 134);
-            btnGrantReadAll.Margin = new Padding(3, 4, 3, 4);
+            btnGrantReadAll.Location = new Point(17, 198);
             btnGrantReadAll.Name = "btnGrantReadAll";
-            btnGrantReadAll.Size = new Size(309, 33);
+            btnGrantReadAll.Size = new Size(270, 25);
             btnGrantReadAll.TabIndex = 5;
             btnGrantReadAll.Text = "Grant read (all)";
             btnGrantReadAll.UseVisualStyleBackColor = true;
             // 
             // btnRevokeAll
             // 
-            btnRevokeAll.Location = new Point(338, 134);
-            btnRevokeAll.Margin = new Padding(3, 4, 3, 4);
+            btnRevokeAll.Location = new Point(297, 198);
             btnRevokeAll.Name = "btnRevokeAll";
-            btnRevokeAll.Size = new Size(309, 33);
+            btnRevokeAll.Size = new Size(270, 25);
             btnRevokeAll.TabIndex = 6;
             btnRevokeAll.Text = "Revoke all";
             btnRevokeAll.UseVisualStyleBackColor = true;
             // 
             // btnOk
             // 
-            btnOk.Location = new Point(704, 715);
-            btnOk.Margin = new Padding(3, 4, 3, 4);
+            btnOk.Location = new Point(616, 628);
             btnOk.Name = "btnOk";
-            btnOk.Size = new Size(86, 37);
+            btnOk.Size = new Size(75, 28);
             btnOk.TabIndex = 3;
             btnOk.Text = "OK";
             btnOk.UseVisualStyleBackColor = true;
             // 
             // btnCancel
             // 
-            btnCancel.Location = new Point(797, 715);
-            btnCancel.Margin = new Padding(3, 4, 3, 4);
+            btnCancel.Location = new Point(697, 628);
             btnCancel.Name = "btnCancel";
-            btnCancel.Size = new Size(86, 37);
+            btnCancel.Size = new Size(75, 28);
             btnCancel.TabIndex = 4;
             btnCancel.Text = "Cancel";
             btnCancel.UseVisualStyleBackColor = true;
@@ -453,10 +421,10 @@ namespace HSTRYDoc
             // KeyManagerDialog
             // 
             AcceptButton = btnOk;
-            AutoScaleDimensions = new SizeF(8F, 20F);
+            AutoScaleDimensions = new SizeF(7F, 15F);
             AutoScaleMode = AutoScaleMode.Font;
             CancelButton = btnCancel;
-            ClientSize = new Size(896, 768);
+            ClientSize = new Size(784, 668);
             Controls.Add(grpBlockAccess);
             Controls.Add(btnCancel);
             Controls.Add(btnOk);
@@ -464,7 +432,6 @@ namespace HSTRYDoc
             Controls.Add(grpMyKeys);
             FormBorderStyle = FormBorderStyle.FixedDialog;
             Icon = (Icon)resources.GetObject("$this.Icon");
-            Margin = new Padding(3, 4, 3, 4);
             MaximizeBox = false;
             MinimizeBox = false;
             Name = "KeyManagerDialog";

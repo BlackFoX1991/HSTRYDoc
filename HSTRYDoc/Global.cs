@@ -6,12 +6,7 @@ namespace HSTRYDoc
     public static class Global
     {
         public static readonly string AppName = "HstryDocu";
-        public static readonly string AppVersion = "1.0.0";
-
-        /// <summary>
-        /// Represents the version identifier for the container format.
-        /// </summary>
-        public static readonly byte ContainerVersion = 0x10;
+        public static readonly string AppVersion = "4.1.1";
 
         /// <summary>
         /// Default encoding for RTF string <-> bytes.

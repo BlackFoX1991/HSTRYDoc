@@ -1,4 +1,5 @@
 ﻿using System.ComponentModel;
+using System.Drawing.Drawing2D;
 
 namespace HSTRYDoc;
 
@@ -30,7 +31,6 @@ public sealed class ShadowPanel : Panel
         set { _shadowOffsetY = Math.Max(0, value); UpdatePadding(); Invalidate(); }
     }
 
-    // dunklerer Schatten (0..255)
     [DesignerSerializationVisibility(DesignerSerializationVisibility.Visible)]
     public int MaxAlpha
     {
@@ -51,41 +51,59 @@ public sealed class ShadowPanel : Panel
 
     private void UpdatePadding()
     {
-        // Content liegt oben/links, Schatten braucht Platz rechts/unten
-        Padding = new Padding(0, 0, _shadowSize + _shadowOffsetX, _shadowSize + _shadowOffsetY);
+        // Schatten auf allen Seiten: links/oben mind. ShadowSize,
+        // rechts/unten ShadowSize + Offset (weil du den Schatten nach rechts/unten schiebst)
+        Padding = new Padding(
+            left: _shadowSize,
+            top: _shadowSize,
+            right: _shadowSize + _shadowOffsetX,
+            bottom: _shadowSize + _shadowOffsetY
+        );
     }
 
     protected override void OnPaint(PaintEventArgs e)
     {
         base.OnPaint(e);
 
-        // Content-Rechteck (da, wo deine Child-Controls liegen)
-        Rectangle content = ClientRectangle;
-        content.Width -= Padding.Right;
-        content.Height -= Padding.Bottom;
-
-        if (content.Width <= 0 || content.Height <= 0) return;
         if (_shadowSize <= 0) return;
 
-        // Schatten: rechts + unten, mit Verlauf (innen dunkler, außen heller)
-        for (int i = 0; i < _shadowSize; i++)
+        // Content-Rechteck: dort liegen die Child-Controls
+        var content = new Rectangle(
+            Padding.Left,
+            Padding.Top,
+            ClientSize.Width - Padding.Horizontal,
+            ClientSize.Height - Padding.Vertical
+        );
+
+        if (content.Width <= 0 || content.Height <= 0) return;
+
+        // Schattenbasis = Content, um Offset verschoben (Drop-Shadow nach rechts/unten)
+        var shadowBase = content;
+        shadowBase.Offset(_shadowOffsetX, _shadowOffsetY);
+
+        // Für saubere 1px-Ringe
+        var oldSmoothing = e.Graphics.SmoothingMode;
+        e.Graphics.SmoothingMode = SmoothingMode.None;
+
+        // Schatten als konzentrische Rechtecke (1px pro Schritt)
+        // i=1..ShadowSize => außen heller, innen dunkler
+        for (int i = 1; i <= _shadowSize; i++)
         {
-            float t = 1f - (i / (float)_shadowSize);     // 1..0
-            int a = (int)(_maxAlpha * t * t);            // quadratisch = schöner Verlauf
+            float t = 1f - (i / (float)_shadowSize); // ~1..0
+            int a = (int)(_maxAlpha * t * t);
 
-            using var b = new SolidBrush(Color.FromArgb(a, 0, 0, 0));
+            using var pen = new Pen(Color.FromArgb(a, 0, 0, 0), 1f);
 
-            // rechter Streifen
-            int x = content.Right + _shadowOffsetX + i;
-            int y = content.Top + _shadowOffsetY;
-            int h = content.Height + (_shadowSize - i);  // nach unten auslaufend
-            e.Graphics.FillRectangle(b, x, y, 1, h);
+            var r = shadowBase;
+            r.Inflate(i, i);
 
-            // unterer Streifen
-            int bx = content.Left + _shadowOffsetX;
-            int by = content.Bottom + _shadowOffsetY + i;
-            int w = content.Width + (_shadowSize - i);   // nach rechts auslaufend
-            e.Graphics.FillRectangle(b, bx, by, w, 1);
+            // -1, damit das Rechteck sauber innerhalb der Pixelgrenzen liegt
+            r.Width -= 1;
+            r.Height -= 1;
+
+            e.Graphics.DrawRectangle(pen, r);
         }
+
+        e.Graphics.SmoothingMode = oldSmoothing;
     }
 }
