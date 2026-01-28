@@ -1,12 +1,20 @@
-﻿// Container.cs (V3 current, supports loading V2 and V3)
+﻿// Container.cs (V4 current, supports loading V2/V3/V4)
 // - V2: Title stored plaintext, bound into AD (legacy).
 // - V3: Title is AES-GCM encrypted (separate AEAD payload), not stored plaintext.
-// - Data encryption: AES-GCM with random DEK (32 bytes).
-// - Key distribution: DEK wrapped per recipient via RSA-OAEP-SHA256.
-// - Tamper prevention for recipients/header: owner signs header via RSA-PSS-SHA256.
+// - V4: Per-block access control via per-block BEK (Block Encryption Key, 32 bytes) and KeySlots.
+//       Each block stores KeySlots: KeyId + Rights + RSA-OAEP wrapped BEK.
+//       A recipient can read a block only if they have a KeySlot for it.
+// - Data encryption:
+//     V2/V3: AES-GCM with container DEK (32 bytes).
+//     V4: AES-GCM with per-block BEK (32 bytes).
+// - Key distribution:
+//     Header (V2/V3/V4): container DEK wrapped per recipient via RSA-OAEP-SHA256 (membership).
+//     Blocks (V4): BEK wrapped per recipient per block via RSA-OAEP-SHA256.
+// - Tamper prevention for header recipients: owner signs header via RSA-PSS-SHA256.
 //   Any add/remove recipient requires owner private key to re-sign.
-//   Load verifies header signature before unwrapping DEK.
 // - Chain: PrevHash is authenticated via AD (so edits require re-encrypt of subsequent blocks).
+//   NOTE (V4): Because of chaining, editing a block requires write access to ALL subsequent blocks
+//              (to re-encrypt them with updated PrevHash in AD).
 
 using System;
 using System.Buffers.Binary;
@@ -21,18 +29,19 @@ namespace HSTRYDoc
     public sealed class HSTRYContainer
     {
         // Current on-disk format
-        public const byte CurrentVersion = 3;
+        public const byte CurrentVersion = 4;
 
         private const byte RECIPIENT_ALG_RSA_OAEP_SHA256 = 1;
         private const byte HEADER_SIGALG_RSA_PSS_SHA256 = 1;
 
-        // Block AEAD purpose bytes (V3)
+        // Block AEAD purpose bytes (V3/V4)
         private const byte AD_PURPOSE_TITLE = 1;
         private const byte AD_PURPOSE_BODY = 2;
 
-        // V2 support
+        // Versions
         private const byte V2 = 2;
         private const byte V3 = 3;
+        private const byte V4 = 4;
 
         public byte Version { get; private set; } = CurrentVersion;
 
@@ -51,8 +60,13 @@ namespace HSTRYDoc
         private readonly List<Block> _blocks = new();
         public IReadOnlyList<Block> Blocks => _blocks;
 
-        // DEK held in memory while container is open (AES-256)
+        // Container DEK (membership key) held in memory while container is open (AES-256)
+        // - Used to decrypt V2/V3 blocks.
+        // - In V4, this key is only used to prove membership / open the container.
         private byte[] _key = Array.Empty<byte>();
+
+        // Active user's KeyId (SHA256(SPKI(pub-from-private)))
+        private byte[] _activeKeyId = Array.Empty<byte>();
 
         // Cached encoding for RTF bytes
         private Encoding? _encCache;
@@ -123,9 +137,10 @@ namespace HSTRYDoc
         // ============================================================
 
         /// <summary>
-        /// Create a new container (V3 current).
+        /// Create a new container (V4 current).
         /// - ownerPrivateKey signs the header.
         /// - recipients are the public keys that can open the container (should include owner).
+        /// - By default, new blocks grant Read to all recipients and Read|Write to owner.
         /// </summary>
         public static HSTRYContainer CreateNewForRecipients(
             RSA ownerPrivateKey,
@@ -151,19 +166,21 @@ namespace HSTRYDoc
             c.OwnerPublicKeySpki = ownerPrivateKey.ExportSubjectPublicKeyInfo();
             c.HeaderSignatureAlg = HEADER_SIGALG_RSA_PSS_SHA256;
 
-            // Generate DEK (AES-256)
+            // Generate container DEK (membership key, AES-256)
             c._key = new byte[32];
             RandomNumberGenerator.Fill(c._key);
 
-            // Wrap DEK for each recipient
+            // Wrap container DEK for each recipient, and store their SPKI in V4
             foreach (var rsaPub in pubs)
             {
-                byte[] keyId = RsaKeyFiles.ComputeKeyIdFromPublicKey(rsaPub);
+                byte[] spki = rsaPub.ExportSubjectPublicKeyInfo();
+                byte[] keyId = SHA256.HashData(spki);
                 byte[] wrappedDek = rsaPub.Encrypt(c._key, RSAEncryptionPadding.OaepSHA256);
 
                 c._recipients.Add(new RecipientEntry
                 {
                     KeyId = keyId,
+                    PublicKeySpki = spki,
                     Alg = RECIPIENT_ALG_RSA_OAEP_SHA256,
                     WrappedDek = wrappedDek
                 });
@@ -199,7 +216,7 @@ namespace HSTRYDoc
                 throw new InvalidDataException("Invalid file format (magic mismatch).");
 
             byte version = br.ReadByte();
-            if (version != V2 && version != V3)
+            if (version != V2 && version != V3 && version != V4)
                 throw new InvalidDataException($"Unsupported container version: {version}.");
 
             var c = new HSTRYContainer { Version = version };
@@ -221,6 +238,19 @@ namespace HSTRYDoc
                 int keyIdLen = br.ReadByte();
                 byte[] keyId = br.ReadBytes(keyIdLen);
 
+                byte[] spki = Array.Empty<byte>();
+                if (version == V4)
+                {
+                    ushort spkiLen = br.ReadUInt16();
+                    if (spkiLen == 0) throw new InvalidDataException("Recipient SPKI missing (V4).");
+                    spki = br.ReadBytes(spkiLen);
+
+                    // Sanity check KeyId matches SPKI
+                    byte[] check = SHA256.HashData(spki);
+                    if (!check.SequenceEqual(keyId))
+                        throw new InvalidDataException("Recipient KeyId does not match SPKI (V4).");
+                }
+
                 byte alg = br.ReadByte();
 
                 ushort wrappedLen = br.ReadUInt16();
@@ -229,6 +259,7 @@ namespace HSTRYDoc
                 c._recipients.Add(new RecipientEntry
                 {
                     KeyId = keyId,
+                    PublicKeySpki = spki,
                     Alg = alg,
                     WrappedDek = wrappedDek
                 });
@@ -241,17 +272,18 @@ namespace HSTRYDoc
             // Verify signature FIRST (prevents recipient/header tampering)
             c.VerifyHeaderSignatureOrThrow();
 
-            // Find matching recipient by KeyId derived from this private key
-            byte[] myKeyId = RsaKeyFiles.ComputeKeyIdFromPublicKey(privateKey);
+            // Active KeyId derived from this private key
+            c._activeKeyId = RsaKeyFiles.ComputeKeyIdFromPublicKey(privateKey);
 
-            var entry = c._recipients.FirstOrDefault(r => r.KeyId.SequenceEqual(myKeyId));
+            // Find matching recipient by KeyId
+            var entry = c._recipients.FirstOrDefault(r => r.KeyId.SequenceEqual(c._activeKeyId));
             if (entry == null)
                 throw new CryptographicException("No matching recipient entry for this private key.");
 
             if (entry.Alg != RECIPIENT_ALG_RSA_OAEP_SHA256)
                 throw new CryptographicException("Unsupported recipient key algorithm.");
 
-            // Unwrap DEK
+            // Unwrap container DEK (membership key)
             byte[] dek;
             try
             {
@@ -259,11 +291,11 @@ namespace HSTRYDoc
             }
             catch
             {
-                throw new CryptographicException("Failed to decrypt DEK with the provided private key.");
+                throw new CryptographicException("Failed to decrypt container key with the provided private key.");
             }
 
             if (dek == null || dek.Length != 32)
-                throw new CryptographicException("Invalid DEK length.");
+                throw new CryptographicException("Invalid container key length.");
 
             c._key = dek;
 
@@ -293,9 +325,9 @@ namespace HSTRYDoc
                     int ctLen = br.ReadInt32();
                     b.Ciphertext = br.ReadBytes(ctLen);
                 }
-                else // V3
+                else if (version == V3)
                 {
-                    // V3: encrypted title + encrypted body
+                    // V3: encrypted title + encrypted body with container DEK
                     b.CreatedUtc = new DateTimeOffset(br.ReadInt64(), TimeSpan.Zero);
                     b.ModifiedUtc = new DateTimeOffset(br.ReadInt64(), TimeSpan.Zero);
 
@@ -317,8 +349,77 @@ namespace HSTRYDoc
                     if (ctLen < 0) throw new InvalidDataException("Invalid ciphertext length.");
                     b.Ciphertext = br.ReadBytes(ctLen);
 
-                    // Title plaintext will be hydrated during Validate()
+                    // Title plaintext hydrated during Validate()
                     b.Title = string.Empty;
+                }
+                else // V4
+                {
+                    b.CreatedUtc = new DateTimeOffset(br.ReadInt64(), TimeSpan.Zero);
+                    b.ModifiedUtc = new DateTimeOffset(br.ReadInt64(), TimeSpan.Zero);
+
+                    b.PrevHash = br.ReadBytes(Crypto.Sha256Size);
+
+                    int slotCount = br.ReadInt32();
+                    if (slotCount < 0) throw new InvalidDataException("Invalid KeySlot count (V4).");
+
+                    for (int s = 0; s < slotCount; s++)
+                    {
+                        int kidLen = br.ReadByte();
+                        byte[] kid = br.ReadBytes(kidLen);
+
+                        var rights = (BlockRights)br.ReadByte();
+                        byte alg = br.ReadByte();
+
+                        ushort wlen = br.ReadUInt16();
+                        byte[] wrappedBek = br.ReadBytes(wlen);
+
+                        b.KeySlots.Add(new BlockKeySlot
+                        {
+                            KeyId = kid,
+                            Rights = rights,
+                            Alg = alg,
+                            WrappedBek = wrappedBek
+                        });
+                    }
+
+                    // Try unwrap BEK for active user (optional)
+                    var mySlot = b.KeySlots.FirstOrDefault(x => x.KeyId.SequenceEqual(c._activeKeyId));
+                    if (mySlot != null)
+                    {
+                        if (mySlot.Alg != RECIPIENT_ALG_RSA_OAEP_SHA256)
+                            throw new CryptographicException("Unsupported block key algorithm.");
+
+                        try
+                        {
+                            byte[] bek = privateKey.Decrypt(mySlot.WrappedBek, RSAEncryptionPadding.OaepSHA256);
+                            if (bek == null || bek.Length != 32)
+                                throw new CryptographicException("Invalid BEK length.");
+                            b.BlockKey = bek;
+                            b.MyRights = mySlot.Rights;
+                        }
+                        catch
+                        {
+                            throw new CryptographicException("Failed to decrypt BEK for a block.");
+                        }
+                    }
+
+                    // Title payload
+                    b.TitleNonce = br.ReadBytes(Crypto.AesGcmNonceSize);
+                    b.TitleTag = br.ReadBytes(Crypto.AesGcmTagSize);
+
+                    int titleCtLen = br.ReadInt32();
+                    if (titleCtLen < 0) throw new InvalidDataException("Invalid title ciphertext length.");
+                    b.TitleCiphertext = br.ReadBytes(titleCtLen);
+
+                    // Body payload
+                    b.Nonce = br.ReadBytes(Crypto.AesGcmNonceSize);
+                    b.Tag = br.ReadBytes(Crypto.AesGcmTagSize);
+
+                    int ctLen = br.ReadInt32();
+                    if (ctLen < 0) throw new InvalidDataException("Invalid ciphertext length.");
+                    b.Ciphertext = br.ReadBytes(ctLen);
+
+                    b.Title = string.Empty; // hydrated for accessible blocks
                 }
 
                 c._blocks.Add(b);
@@ -345,14 +446,8 @@ namespace HSTRYDoc
         {
             EnsureKey();
 
-            // If this container was loaded as V2, upgrade it to V3 on save
-            if (Version == V2)
-            {
-                UpgradeV2ToV3();
-            }
-
-            if (Version != V3)
-                throw new InvalidOperationException($"Unsupported save version: {Version}.");
+            if (Version != V4)
+                throw new InvalidOperationException("This container is not V4. Call UpgradeToV4(...) first and then Save().");
 
             EnsureHeaderSigned();
 
@@ -378,17 +473,23 @@ namespace HSTRYDoc
             {
                 if (r.KeyId == null || r.KeyId.Length == 0)
                     throw new InvalidDataException("Recipient KeyId missing.");
+                if (r.PublicKeySpki == null || r.PublicKeySpki.Length == 0)
+                    throw new InvalidDataException("Recipient SPKI missing (V4).");
                 if (r.WrappedDek == null || r.WrappedDek.Length == 0)
                     throw new InvalidDataException("Recipient WrappedDek missing.");
 
                 bw.Write((byte)r.KeyId.Length);
                 bw.Write(r.KeyId);
 
+                if (r.PublicKeySpki.Length > ushort.MaxValue)
+                    throw new InvalidDataException("Recipient SPKI too large.");
+                bw.Write((ushort)r.PublicKeySpki.Length);
+                bw.Write(r.PublicKeySpki);
+
                 bw.Write(r.Alg);
 
                 if (r.WrappedDek.Length > ushort.MaxValue)
                     throw new InvalidDataException("WrappedDek too large.");
-
                 bw.Write((ushort)r.WrappedDek.Length);
                 bw.Write(r.WrappedDek);
             }
@@ -403,10 +504,10 @@ namespace HSTRYDoc
 
             bw.Write(_blocks.Count);
             foreach (var b in _blocks)
-                WriteBlockV3(bw, b);
+                WriteBlockV4(bw, b);
         }
 
-        private static void WriteBlockV3(BinaryWriter bw, Block b)
+        private static void WriteBlockV4(BinaryWriter bw, Block b)
         {
             bw.Write(b.Index);
 
@@ -415,13 +516,34 @@ namespace HSTRYDoc
 
             bw.Write(b.PrevHash);
 
+            // KeySlots
+            bw.Write(b.KeySlots.Count);
+            foreach (var s in b.KeySlots)
+            {
+                if (s.KeyId == null || s.KeyId.Length == 0)
+                    throw new InvalidDataException("Block KeySlot KeyId missing.");
+                if (s.WrappedBek == null || s.WrappedBek.Length == 0)
+                    throw new InvalidDataException("Block KeySlot WrappedBek missing.");
+                if (s.WrappedBek.Length > ushort.MaxValue)
+                    throw new InvalidDataException("Block KeySlot WrappedBek too large.");
+
+                bw.Write((byte)s.KeyId.Length);
+                bw.Write(s.KeyId);
+
+                bw.Write((byte)s.Rights);
+                bw.Write(s.Alg);
+
+                bw.Write((ushort)s.WrappedBek.Length);
+                bw.Write(s.WrappedBek);
+            }
+
             // Title payload
             if (b.TitleCiphertext == null || b.TitleCiphertext.Length == 0)
-                throw new InvalidDataException("Encrypted title is missing (V3).");
+                throw new InvalidDataException("Encrypted title is missing (V4).");
             if (b.TitleNonce == null || b.TitleNonce.Length != Crypto.AesGcmNonceSize)
-                throw new InvalidDataException("Title nonce missing/invalid (V3).");
+                throw new InvalidDataException("Title nonce missing/invalid (V4).");
             if (b.TitleTag == null || b.TitleTag.Length != Crypto.AesGcmTagSize)
-                throw new InvalidDataException("Title tag missing/invalid (V3).");
+                throw new InvalidDataException("Title tag missing/invalid (V4).");
 
             bw.Write(b.TitleNonce);
             bw.Write(b.TitleTag);
@@ -439,20 +561,13 @@ namespace HSTRYDoc
         // Recipient management (owner-signed)
         // ============================================================
 
-        [Obsolete("Owner private key is required to modify recipients (header is signed). Use AddRecipient(ownerPrivateKey, recipientPublicKey).")]
-        public void AddRecipient(RSA recipientPublicKey)
-            => throw new InvalidOperationException("Owner private key is required to add recipients (signed header).");
-
-        [Obsolete("Owner private key is required to modify recipients (header is signed). Use RemoveRecipientByKeyIdHex(ownerPrivateKey, keyIdHex).")]
-        public bool RemoveRecipientByKeyIdHex(string keyIdHex)
-            => throw new InvalidOperationException("Owner private key is required to remove recipients (signed header).");
-
         public void AddRecipient(RSA ownerPrivateKey, RSA recipientPublicKey)
         {
             EnsureKey();
             EnsureOwnerPrivateKeyMatches(ownerPrivateKey);
 
-            byte[] keyId = RsaKeyFiles.ComputeKeyIdFromPublicKey(recipientPublicKey);
+            byte[] spki = recipientPublicKey.ExportSubjectPublicKeyInfo();
+            byte[] keyId = SHA256.HashData(spki);
 
             if (_recipients.Any(r => r.KeyId.SequenceEqual(keyId)))
                 throw new InvalidOperationException("Recipient already exists.");
@@ -462,6 +577,7 @@ namespace HSTRYDoc
             _recipients.Add(new RecipientEntry
             {
                 KeyId = keyId,
+                PublicKeySpki = spki,
                 Alg = RECIPIENT_ALG_RSA_OAEP_SHA256,
                 WrappedDek = wrappedDek
             });
@@ -486,6 +602,249 @@ namespace HSTRYDoc
                 ResignHeader(ownerPrivateKey);
 
             return removed > 0;
+        }
+
+        // ============================================================
+        // Block access control (V4)
+        // ============================================================
+
+        public void GrantBlockAccess(RSA ownerPrivateKey, int blockIndex, RSA recipientPublicKey, BlockRights rights, bool replaceExisting = true)
+        {
+            if (Version != V4)
+                throw new InvalidOperationException("Block access control is only available in V4.");
+
+            EnsureKey();
+            EnsureOwnerPrivateKeyMatches(ownerPrivateKey);
+
+            if ((uint)blockIndex >= (uint)_blocks.Count)
+                throw new ArgumentOutOfRangeException(nameof(blockIndex));
+
+            if (recipientPublicKey == null)
+                throw new ArgumentNullException(nameof(recipientPublicKey));
+
+            byte[] spki = recipientPublicKey.ExportSubjectPublicKeyInfo();
+            byte[] keyId = SHA256.HashData(spki);
+
+            if (!_recipients.Any(r => r.KeyId.SequenceEqual(keyId)))
+                throw new InvalidOperationException("Recipient is not in container recipients. AddRecipient(...) first.");
+
+            var b = _blocks[blockIndex];
+
+            EnsureWritableFrom(blockIndex); // chain requirement
+
+            if (b.BlockKey == null || b.BlockKey.Length != 32)
+                throw new UnauthorizedAccessException("No access to block key (BEK).");
+
+            // Decrypt current plaintext BEFORE changing slots (slots are part of AD in V4).
+            string titlePt = DecryptTitleV4OrThrow(b);
+            byte[] bodyPt = DecryptBodyV4OrThrow(b);
+
+            // Update slots
+            if (replaceExisting)
+                b.KeySlots.RemoveAll(s => s.KeyId.SequenceEqual(keyId));
+
+            byte[] wrappedBek = recipientPublicKey.Encrypt(b.BlockKey, RSAEncryptionPadding.OaepSHA256);
+            b.KeySlots.Add(new BlockKeySlot
+            {
+                KeyId = keyId,
+                Rights = rights,
+                Alg = RECIPIENT_ALG_RSA_OAEP_SHA256,
+                WrappedBek = wrappedBek
+            });
+
+            // Re-encrypt this block (AD changed), then fix chain forward
+            EncryptTitleIntoV4(b, b.BlockKey, titlePt);
+            EncryptBodyIntoV4(b, b.BlockKey, bodyPt);
+
+            ReencryptFromV4(blockIndex + 1);
+        }
+
+        public void RevokeBlockAccess(RSA ownerPrivateKey, int blockIndex, string keyIdHex)
+        {
+            if (Version != V4)
+                throw new InvalidOperationException("Block access control is only available in V4.");
+
+            EnsureKey();
+            EnsureOwnerPrivateKeyMatches(ownerPrivateKey);
+
+            if ((uint)blockIndex >= (uint)_blocks.Count)
+                throw new ArgumentOutOfRangeException(nameof(blockIndex));
+
+            if (string.IsNullOrWhiteSpace(keyIdHex))
+                throw new ArgumentException("KeyId is required.");
+
+            byte[] keyId = Convert.FromHexString(keyIdHex);
+
+            var b = _blocks[blockIndex];
+
+            EnsureWritableFrom(blockIndex); // chain requirement
+
+            if (b.BlockKey == null || b.BlockKey.Length != 32)
+                throw new UnauthorizedAccessException("No access to block key (BEK).");
+
+            // Decrypt current plaintext BEFORE changing slots
+            string titlePt = DecryptTitleV4OrThrow(b);
+            byte[] bodyPt = DecryptBodyV4OrThrow(b);
+
+            int removed = b.KeySlots.RemoveAll(s => s.KeyId.SequenceEqual(keyId));
+            if (removed == 0)
+                return;
+
+            // Re-encrypt this block (AD changed), then fix chain forward
+            EncryptTitleIntoV4(b, b.BlockKey, titlePt);
+            EncryptBodyIntoV4(b, b.BlockKey, bodyPt);
+
+            ReencryptFromV4(blockIndex + 1);
+        }
+
+        // ============================================================
+        // Upgrade to V4
+        // ============================================================
+
+        /// <summary>
+        /// Upgrades an opened V2/V3 container to V4. You must provide all existing recipients' PUBLIC KEYS,
+        /// because V2/V3 headers do not store recipients' SPKIs.
+        /// </summary>
+        public void UpgradeToV4(RSA ownerPrivateKey, IEnumerable<RSA> recipientPublicKeys, BlockRights nonOwnerDefaultRights = BlockRights.Read)
+        {
+            EnsureKey();
+            EnsureOwnerPrivateKeyMatches(ownerPrivateKey);
+
+            if (Version == V4)
+                return;
+
+            if (Version != V2 && Version != V3)
+                throw new InvalidOperationException("Only V2/V3 containers can be upgraded.");
+
+            if (recipientPublicKeys == null)
+                throw new ArgumentNullException(nameof(recipientPublicKeys));
+
+            var pubList = recipientPublicKeys.ToList();
+            if (pubList.Count == 0)
+                throw new ArgumentException("At least one recipient public key is required.");
+
+            // Map KeyId -> public key SPKI
+            var map = new Dictionary<string, byte[]>(StringComparer.OrdinalIgnoreCase);
+            foreach (var rsaPub in pubList)
+            {
+                byte[] spki = rsaPub.ExportSubjectPublicKeyInfo();
+                string kid = Convert.ToHexString(SHA256.HashData(spki));
+                map[kid] = spki;
+            }
+
+            // Ensure all existing recipients are provided
+            foreach (var r in _recipients)
+            {
+                string kid = Convert.ToHexString(r.KeyId);
+                if (!map.ContainsKey(kid))
+                    throw new InvalidOperationException($"Missing public key SPKI for existing recipient {kid}.");
+            }
+
+            // Decrypt plaintexts from old format
+            var titles = new List<string>(_blocks.Count);
+            var bodies = new List<byte[]>(_blocks.Count);
+
+            for (int i = 0; i < _blocks.Count; i++)
+            {
+                var b = _blocks[i];
+
+                if (Version == V2)
+                {
+                    titles.Add(b.Title);
+                    byte[] ad = BlockAuth.BuildAssociatedData(V2, b, 0);
+                    byte[] pt = Crypto.DecryptAesGcm(_key, b.Nonce, b.Ciphertext, b.Tag, ad);
+                    bodies.Add(pt);
+                }
+                else // V3
+                {
+                    // V3 title
+                    byte[] adTitle = BlockAuth.BuildAssociatedData(V3, b, AD_PURPOSE_TITLE);
+                    byte[] titlePt = Crypto.DecryptAesGcm(_key, b.TitleNonce, b.TitleCiphertext, b.TitleTag, adTitle);
+                    titles.Add(Encoding.UTF8.GetString(titlePt));
+
+                    // V3 body
+                    byte[] adBody = BlockAuth.BuildAssociatedData(V3, b, AD_PURPOSE_BODY);
+                    byte[] bodyPt = Crypto.DecryptAesGcm(_key, b.Nonce, b.Ciphertext, b.Tag, adBody);
+                    bodies.Add(bodyPt);
+                }
+            }
+
+            // Build V4 recipient list with SPKI and fresh wrapped DEK
+            var newRecipients = new List<RecipientEntry>(_recipients.Count);
+
+            foreach (var old in _recipients)
+            {
+                string kid = Convert.ToHexString(old.KeyId);
+                byte[] spki = map[kid];
+
+                using var rsaPub = RSA.Create();
+                rsaPub.ImportSubjectPublicKeyInfo(spki, out _);
+
+                byte[] wrappedDek = rsaPub.Encrypt(_key, RSAEncryptionPadding.OaepSHA256);
+
+                newRecipients.Add(new RecipientEntry
+                {
+                    KeyId = old.KeyId,
+                    PublicKeySpki = spki,
+                    Alg = RECIPIENT_ALG_RSA_OAEP_SHA256,
+                    WrappedDek = wrappedDek
+                });
+            }
+
+            _recipients.Clear();
+            _recipients.AddRange(newRecipients);
+
+            // Switch version to V4 and rebuild blocks with per-block BEKs + slots
+            Version = V4;
+
+            if (_blocks.Count > 0)
+                _blocks[0].PrevHash = ZeroHash.ToArray();
+
+            for (int i = 0; i < _blocks.Count; i++)
+            {
+                var b = _blocks[i];
+                b.Index = i;
+
+                if (i == 0)
+                    b.PrevHash = ZeroHash.ToArray();
+                else
+                    b.PrevHash = ComputeBlockHash(_blocks[i - 1]);
+
+                // New BEK for each block
+                b.BlockKey = new byte[32];
+                RandomNumberGenerator.Fill(b.BlockKey);
+
+                // Slots: owner RW, others default
+                b.KeySlots.Clear();
+                foreach (var r in _recipients)
+                {
+                    using var rsaPub = RSA.Create();
+                    rsaPub.ImportSubjectPublicKeyInfo(r.PublicKeySpki, out _);
+
+                    var rights = r.KeyId.SequenceEqual(OwnerKeyId) ? (BlockRights.Read | BlockRights.Write) : nonOwnerDefaultRights;
+
+                    byte[] wrappedBek = rsaPub.Encrypt(b.BlockKey, RSAEncryptionPadding.OaepSHA256);
+
+                    b.KeySlots.Add(new BlockKeySlot
+                    {
+                        KeyId = r.KeyId,
+                        Rights = rights,
+                        Alg = RECIPIENT_ALG_RSA_OAEP_SHA256,
+                        WrappedBek = wrappedBek
+                    });
+                }
+
+                // Encrypt title + body with BEK
+                b.Title = titles[i] ?? string.Empty;
+                EncryptTitleIntoV4(b, b.BlockKey, b.Title);
+                EncryptBodyIntoV4(b, b.BlockKey, bodies[i]);
+            }
+
+            // Re-sign header (recipient layout changed to V4)
+            ResignHeader(ownerPrivateKey);
+
+            if (!Validate(out string err))
+                throw new InvalidDataException("Upgrade failed: " + err);
         }
 
         // ============================================================
@@ -528,6 +887,12 @@ namespace HSTRYDoc
             {
                 bw.Write((byte)r.KeyId.Length);
                 bw.Write(r.KeyId);
+
+                if (Version == V4)
+                {
+                    bw.Write((ushort)r.PublicKeySpki.Length);
+                    bw.Write(r.PublicKeySpki);
+                }
 
                 bw.Write(r.Alg);
 
@@ -591,8 +956,16 @@ namespace HSTRYDoc
             }
         }
 
+        /// <summary>
+        /// Adds a block. Default access:
+        /// - Owner: Read|Write
+        /// - Other recipients: Read
+        /// </summary>
         public Block AddRtfDocument(string title, string rtf)
         {
+            if (Version != V4)
+                throw new InvalidOperationException("AddRtfDocument is only supported in V4.");
+
             EnsureKey();
 
             title ??= GenerateUniqueTitle();
@@ -606,12 +979,38 @@ namespace HSTRYDoc
                 PrevHash = _blocks.Count == 0 ? ZeroHash.ToArray() : ComputeBlockHash(_blocks[^1])
             };
 
-            // Encrypt title (V3)
-            EncryptTitleInto(b, title);
+            // Generate BEK
+            b.BlockKey = new byte[32];
+            RandomNumberGenerator.Fill(b.BlockKey);
 
-            // Encrypt body
+            // Default slots: owner RW, others R
+            b.KeySlots.Clear();
+            foreach (var r in _recipients)
+            {
+                using var rsaPub = RSA.Create();
+                rsaPub.ImportSubjectPublicKeyInfo(r.PublicKeySpki, out _);
+
+                var rights = r.KeyId.SequenceEqual(OwnerKeyId) ? (BlockRights.Read | BlockRights.Write) : BlockRights.Read;
+                byte[] wrappedBek = rsaPub.Encrypt(b.BlockKey, RSAEncryptionPadding.OaepSHA256);
+
+                b.KeySlots.Add(new BlockKeySlot
+                {
+                    KeyId = r.KeyId,
+                    Rights = rights,
+                    Alg = RECIPIENT_ALG_RSA_OAEP_SHA256,
+                    WrappedBek = wrappedBek
+                });
+
+                // Cache rights for active user if this is them
+                if (r.KeyId.SequenceEqual(_activeKeyId))
+                    b.MyRights = rights;
+            }
+
+            // Encrypt title + body with BEK
+            EncryptTitleIntoV4(b, b.BlockKey, title);
+
             byte[] plaintext = GetContainerEncoding().GetBytes(rtf ?? string.Empty);
-            EncryptBodyInto(b, plaintext);
+            EncryptBodyIntoV4(b, b.BlockKey, plaintext);
 
             _blocks.Add(b);
             return b;
@@ -622,9 +1021,20 @@ namespace HSTRYDoc
             EnsureKey();
             var b = GetBlock(index);
 
-            byte[] ad = BlockAuth.BuildAssociatedData(Version, b, AD_PURPOSE_BODY);
-            byte[] pt = Crypto.DecryptAesGcm(_key, b.Nonce, b.Ciphertext, b.Tag, ad);
-            return GetContainerEncoding().GetString(pt);
+            if (Version == V2 || Version == V3)
+            {
+                byte[] ad = BlockAuth.BuildAssociatedData(Version, b, (Version == V2) ? (byte)0 : AD_PURPOSE_BODY);
+                byte[] pt = Crypto.DecryptAesGcm(_key, b.Nonce, b.Ciphertext, b.Tag, ad);
+                return GetContainerEncoding().GetString(pt);
+            }
+
+            // V4
+            if ((b.MyRights & BlockRights.Read) == 0 || b.BlockKey == null)
+                throw new UnauthorizedAccessException("No read access to this block.");
+
+            byte[] adBody = BlockAuth.BuildAssociatedData(V4, b, AD_PURPOSE_BODY);
+            byte[] bodyPt = Crypto.DecryptAesGcm(b.BlockKey, b.Nonce, b.Ciphertext, b.Tag, adBody);
+            return GetContainerEncoding().GetString(bodyPt);
         }
 
         public void UpdateRtfDocument(int index, string newRtf)
@@ -632,23 +1042,41 @@ namespace HSTRYDoc
             EnsureKey();
             var b = GetBlock(index);
 
+            if (Version != V4)
+                throw new InvalidOperationException("UpdateRtfDocument is only supported in V4.");
+
+            EnsureWritableFrom(index);
+
+            if (b.BlockKey == null)
+                throw new UnauthorizedAccessException("No access to this block.");
+
+            // Decrypt existing body first (because ModifiedUtc is in AD)
+            byte[] oldAdBody = BlockAuth.BuildAssociatedData(V4, b, AD_PURPOSE_BODY);
+            byte[] bodyPtOld = Crypto.DecryptAesGcm(b.BlockKey, b.Nonce, b.Ciphertext, b.Tag, oldAdBody);
+
             b.ModifiedUtc = DateTimeOffset.UtcNow;
 
             // Update title payload too because ModifiedUtc is in AD
-            EncryptTitleInto(b, b.Title);
+            string titlePt = DecryptTitleV4OrThrow(b);
+            EncryptTitleIntoV4(b, b.BlockKey, titlePt);
 
             byte[] pt = GetContainerEncoding().GetBytes(newRtf ?? string.Empty);
-            EncryptBodyInto(b, pt);
+            EncryptBodyIntoV4(b, b.BlockKey, pt);
 
-            ReencryptFrom(index + 1);
+            ReencryptFromV4(index + 1);
         }
 
         public void RemoveBlock(int index)
         {
             EnsureKey();
 
+            if (Version != V4)
+                throw new InvalidOperationException("RemoveBlock is only supported in V4.");
+
             if ((uint)index >= (uint)_blocks.Count)
                 throw new ArgumentOutOfRangeException(nameof(index));
+
+            EnsureWritableFrom(index); // chain requirement (renumber + prevhash updates)
 
             _blocks.RemoveAt(index);
 
@@ -663,12 +1091,15 @@ namespace HSTRYDoc
             _blocks[0].PrevHash = ZeroHash.ToArray();
 
             // Re-encrypt from index (chain must be rebuilt due to index and prevhash changes)
-            ReencryptFrom(index);
+            ReencryptFromV4(index);
         }
 
         public void RenameBlock(int index, string newTitle)
         {
             EnsureKey();
+
+            if (Version != V4)
+                throw new InvalidOperationException("RenameBlock is only supported in V4.");
 
             if (string.IsNullOrWhiteSpace(newTitle))
                 throw new ArgumentException("Title must not be empty.");
@@ -678,17 +1109,22 @@ namespace HSTRYDoc
 
             var b = GetBlock(index);
 
-            // Decrypt body (because ModifiedUtc changes => AD changes)
-            byte[] oldBodyAd = BlockAuth.BuildAssociatedData(Version, b, AD_PURPOSE_BODY);
-            byte[] bodyPt = Crypto.DecryptAesGcm(_key, b.Nonce, b.Ciphertext, b.Tag, oldBodyAd);
+            EnsureWritableFrom(index);
+
+            if (b.BlockKey == null)
+                throw new UnauthorizedAccessException("No access to this block.");
+
+            // Decrypt body first (ModifiedUtc changes => AD changes)
+            byte[] oldAdBody = BlockAuth.BuildAssociatedData(V4, b, AD_PURPOSE_BODY);
+            byte[] bodyPt = Crypto.DecryptAesGcm(b.BlockKey, b.Nonce, b.Ciphertext, b.Tag, oldAdBody);
 
             b.Title = newTitle;
             b.ModifiedUtc = DateTimeOffset.UtcNow;
 
-            EncryptTitleInto(b, b.Title);
-            EncryptBodyInto(b, bodyPt);
+            EncryptTitleIntoV4(b, b.BlockKey, b.Title);
+            EncryptBodyIntoV4(b, b.BlockKey, bodyPt);
 
-            ReencryptFrom(index + 1);
+            ReencryptFromV4(index + 1);
         }
 
         public void TransferOwnership(RSA currentOwnerPrivateKey, RSA newOwnerPrivateKey, bool ensureNewOwnerIsRecipient = true)
@@ -699,19 +1135,25 @@ namespace HSTRYDoc
             if (newOwnerPrivateKey == null)
                 throw new ArgumentNullException(nameof(newOwnerPrivateKey));
 
+            if (Version != V4)
+                throw new InvalidOperationException("TransferOwnership is only supported in V4.");
+
             // Ensure the new owner can open the container
             if (ensureNewOwnerIsRecipient)
             {
                 using var newOwnerPub = RSA.Create();
                 newOwnerPub.ImportSubjectPublicKeyInfo(newOwnerPrivateKey.ExportSubjectPublicKeyInfo(), out _);
 
-                byte[] newKeyId = RsaKeyFiles.ComputeKeyIdFromPublicKey(newOwnerPub);
+                byte[] newSpki = newOwnerPub.ExportSubjectPublicKeyInfo();
+                byte[] newKeyId = SHA256.HashData(newSpki);
+
                 if (!_recipients.Any(r => r.KeyId.SequenceEqual(newKeyId)))
                 {
                     byte[] wrappedDek = newOwnerPub.Encrypt(_key, RSAEncryptionPadding.OaepSHA256);
                     _recipients.Add(new RecipientEntry
                     {
                         KeyId = newKeyId,
+                        PublicKeySpki = newSpki,
                         Alg = RECIPIENT_ALG_RSA_OAEP_SHA256,
                         WrappedDek = wrappedDek
                     });
@@ -724,14 +1166,11 @@ namespace HSTRYDoc
         }
 
         // ============================================================
-        // Hash / Validate (optimized, secure)
+        // Hash / Validate
         // ============================================================
 
         public byte[] ComputeBlockHash(Block b)
         {
-            // V2 hash includes plaintext title (because it is stored plaintext and part of legacy AD)
-            // V3 hash includes title AEAD payload (nonce/tag/ciphertext), not plaintext title.
-
             Span<byte> b1 = stackalloc byte[1];
             Span<byte> i4 = stackalloc byte[4];
             Span<byte> i8 = stackalloc byte[8];
@@ -762,7 +1201,7 @@ namespace HSTRYDoc
             }
             else
             {
-                // V3 title payload
+                // V3/V4 title payload
                 Span<byte> tlen = stackalloc byte[4];
                 BinaryPrimitives.WriteInt32LittleEndian(tlen, b.TitleCiphertext?.Length ?? 0);
 
@@ -771,6 +1210,13 @@ namespace HSTRYDoc
                 ih.AppendData(tlen);
                 if (b.TitleCiphertext != null && b.TitleCiphertext.Length > 0)
                     ih.AppendData(b.TitleCiphertext);
+            }
+
+            if (Version == V4)
+            {
+                // Bind access control metadata into block hash
+                byte[] accessHash = BlockAuth.ComputeAccessHashV4(b);
+                ih.AppendData(accessHash);
             }
 
             // Body payload
@@ -808,8 +1254,8 @@ namespace HSTRYDoc
                 return false;
             }
 
-            // Validate block 0 AEAD(s)
-            if (!ValidateAndHydrateBlock(_blocks[0], out error, out _))
+            // Validate block 0 (if accessible)
+            if (!ValidateAndHydrateBlock(_blocks[0], out error))
                 return false;
 
             byte[] prevHash = ComputeBlockHash(_blocks[0]);
@@ -830,7 +1276,7 @@ namespace HSTRYDoc
                     return false;
                 }
 
-                if (!ValidateAndHydrateBlock(b, out error, out _))
+                if (!ValidateAndHydrateBlock(b, out error))
                     return false;
 
                 prevHash = ComputeBlockHash(b);
@@ -839,32 +1285,46 @@ namespace HSTRYDoc
             return true;
         }
 
-        private bool ValidateAndHydrateBlock(Block b, out string error, out byte[]? bodyPlaintext)
+        private bool ValidateAndHydrateBlock(Block b, out string error)
         {
             error = string.Empty;
-            bodyPlaintext = null;
 
             try
             {
                 if (Version == V2)
                 {
-                    // V2: only body AEAD; AD binds plaintext title
-                    byte[] ad = BlockAuth.BuildAssociatedData(Version, b, 0);
-                    bodyPlaintext = Crypto.DecryptAesGcm(_key, b.Nonce, b.Ciphertext, b.Tag, ad);
+                    byte[] ad = BlockAuth.BuildAssociatedData(V2, b, 0);
+                    _ = Crypto.DecryptAesGcm(_key, b.Nonce, b.Ciphertext, b.Tag, ad);
                     return true;
                 }
-                else
+
+                if (Version == V3)
                 {
-                    // V3: title AEAD + body AEAD
-                    byte[] adTitle = BlockAuth.BuildAssociatedData(Version, b, AD_PURPOSE_TITLE);
+                    byte[] adTitle = BlockAuth.BuildAssociatedData(V3, b, AD_PURPOSE_TITLE);
                     byte[] titlePt = Crypto.DecryptAesGcm(_key, b.TitleNonce, b.TitleCiphertext, b.TitleTag, adTitle);
                     b.Title = Encoding.UTF8.GetString(titlePt);
 
-                    byte[] adBody = BlockAuth.BuildAssociatedData(Version, b, AD_PURPOSE_BODY);
-                    bodyPlaintext = Crypto.DecryptAesGcm(_key, b.Nonce, b.Ciphertext, b.Tag, adBody);
+                    byte[] adBody = BlockAuth.BuildAssociatedData(V3, b, AD_PURPOSE_BODY);
+                    _ = Crypto.DecryptAesGcm(_key, b.Nonce, b.Ciphertext, b.Tag, adBody);
 
                     return true;
                 }
+
+                // V4: only validate/hydrate if we have BEK
+                if (b.BlockKey == null || (b.MyRights & BlockRights.Read) == 0)
+                {
+                    b.Title = "<restricted>";
+                    return true;
+                }
+
+                byte[] adTitleV4 = BlockAuth.BuildAssociatedData(V4, b, AD_PURPOSE_TITLE);
+                byte[] titlePtV4 = Crypto.DecryptAesGcm(b.BlockKey, b.TitleNonce, b.TitleCiphertext, b.TitleTag, adTitleV4);
+                b.Title = Encoding.UTF8.GetString(titlePtV4);
+
+                byte[] adBodyV4 = BlockAuth.BuildAssociatedData(V4, b, AD_PURPOSE_BODY);
+                _ = Crypto.DecryptAesGcm(b.BlockKey, b.Nonce, b.Ciphertext, b.Tag, adBodyV4);
+
+                return true;
             }
             catch
             {
@@ -874,14 +1334,34 @@ namespace HSTRYDoc
         }
 
         // ============================================================
-        // Internal chain + crypto
+        // Internal chain + crypto (V4)
         // ============================================================
-        private void ReencryptFrom(int startIndex)
+
+        private void EnsureWritableFrom(int startIndex)
+        {
+            if (Version != V4)
+                return;
+
+            if (_blocks.Count == 0) return;
+            if (startIndex < 0) startIndex = 0;
+            if (startIndex >= _blocks.Count) return;
+
+            for (int i = startIndex; i < _blocks.Count; i++)
+            {
+                var b = _blocks[i];
+                if (b.BlockKey == null || (b.MyRights & BlockRights.Write) == 0)
+                    throw new UnauthorizedAccessException("Operation requires write access to this block and all subsequent blocks (hash chain).");
+            }
+        }
+
+        private void ReencryptFromV4(int startIndex)
         {
             if (_blocks.Count == 0) return;
 
             if (startIndex <= 0) startIndex = 1;
             if (startIndex >= _blocks.Count) return;
+
+            EnsureWritableFrom(startIndex);
 
             // rolling hash of previous block (already consistent)
             byte[] prevHash = ComputeBlockHash(_blocks[startIndex - 1]);
@@ -890,42 +1370,59 @@ namespace HSTRYDoc
             {
                 var cur = _blocks[i];
 
-                // decrypt current body plaintext
-                byte[] oldBodyAd = BlockAuth.BuildAssociatedData(Version, cur, AD_PURPOSE_BODY);
-                byte[] bodyPt = Crypto.DecryptAesGcm(_key, cur.Nonce, cur.Ciphertext, cur.Tag, oldBodyAd);
+                if (cur.BlockKey == null)
+                    throw new UnauthorizedAccessException("No access to block key (BEK).");
+
+                // decrypt current plaintexts using OLD AD
+                string titlePt = DecryptTitleV4OrThrow(cur);
+                byte[] bodyPt = DecryptBodyV4OrThrow(cur);
 
                 // update PrevHash
                 cur.PrevHash = prevHash;
 
-                // re-encrypt title (because PrevHash in AD)
-                EncryptTitleInto(cur, cur.Title);
-
-                // re-encrypt body
-                EncryptBodyInto(cur, bodyPt);
+                // re-encrypt title/body with SAME BEK but NEW AD (PrevHash in AD)
+                EncryptTitleIntoV4(cur, cur.BlockKey, titlePt);
+                EncryptBodyIntoV4(cur, cur.BlockKey, bodyPt);
 
                 // update rolling prevHash for next block
                 prevHash = ComputeBlockHash(cur);
             }
         }
 
-        private void EncryptTitleInto(Block b, string title)
+        private string DecryptTitleV4OrThrow(Block b)
         {
-            if (Version == V2)
-                return; // V2 titles are plaintext
+            if (b.BlockKey == null)
+                throw new UnauthorizedAccessException("No access to block key (BEK).");
 
+            byte[] adTitle = BlockAuth.BuildAssociatedData(V4, b, AD_PURPOSE_TITLE);
+            byte[] titlePt = Crypto.DecryptAesGcm(b.BlockKey, b.TitleNonce, b.TitleCiphertext, b.TitleTag, adTitle);
+            return Encoding.UTF8.GetString(titlePt);
+        }
+
+        private byte[] DecryptBodyV4OrThrow(Block b)
+        {
+            if (b.BlockKey == null)
+                throw new UnauthorizedAccessException("No access to block key (BEK).");
+
+            byte[] adBody = BlockAuth.BuildAssociatedData(V4, b, AD_PURPOSE_BODY);
+            return Crypto.DecryptAesGcm(b.BlockKey, b.Nonce, b.Ciphertext, b.Tag, adBody);
+        }
+
+        private void EncryptTitleIntoV4(Block b, byte[] bek, string title)
+        {
             byte[] titleBytes = Encoding.UTF8.GetBytes(title ?? string.Empty);
-            byte[] ad = BlockAuth.BuildAssociatedData(Version, b, AD_PURPOSE_TITLE);
-            var (nonce, ct, tag) = Crypto.EncryptAesGcm(_key, titleBytes, ad);
+            byte[] ad = BlockAuth.BuildAssociatedData(V4, b, AD_PURPOSE_TITLE);
+            var (nonce, ct, tag) = Crypto.EncryptAesGcm(bek, titleBytes, ad);
 
             b.TitleNonce = nonce;
             b.TitleCiphertext = ct;
             b.TitleTag = tag;
         }
 
-        private void EncryptBodyInto(Block b, byte[] plaintext)
+        private void EncryptBodyIntoV4(Block b, byte[] bek, byte[] plaintext)
         {
-            byte[] ad = BlockAuth.BuildAssociatedData(Version, b, (Version == V2) ? (byte)0 : AD_PURPOSE_BODY);
-            var (nonce, ct, tag) = Crypto.EncryptAesGcm(_key, plaintext, ad);
+            byte[] ad = BlockAuth.BuildAssociatedData(V4, b, AD_PURPOSE_BODY);
+            var (nonce, ct, tag) = Crypto.EncryptAesGcm(bek, plaintext, ad);
 
             b.Nonce = nonce;
             b.Ciphertext = ct;
@@ -944,7 +1441,7 @@ namespace HSTRYDoc
             if (_key is null || _key.Length == 0)
                 throw new InvalidOperationException("Container is not open/initialized (no key in memory).");
             if (_key.Length != 32)
-                throw new InvalidOperationException("Invalid DEK length in memory.");
+                throw new InvalidOperationException("Invalid container key length in memory.");
         }
 
         public void CloseKeyMaterial()
@@ -954,70 +1451,21 @@ namespace HSTRYDoc
                 Array.Clear(_key, 0, _key.Length);
                 _key = Array.Empty<byte>();
             }
-        }
 
-        // ============================================================
-        // V2 -> V3 upgrade (secure)
-        // ============================================================
-        private void UpgradeV2ToV3()
-        {
-            if (Version != V2)
-                return;
-
-            // Decrypt all V2 bodies first (using V2 AD that includes plaintext title)
-            var bodyPlain = new List<byte[]>(_blocks.Count);
-
-            for (int i = 0; i < _blocks.Count; i++)
+            foreach (var b in _blocks)
             {
-                var b = _blocks[i];
-
-                // ensure indices consistent for AD in v2
-                if (b.Index != i)
-                    throw new InvalidDataException("Cannot upgrade: invalid indices.");
-
-                byte[] adV2 = BlockAuth.BuildAssociatedData(V2, b, 0);
-                byte[] pt = Crypto.DecryptAesGcm(_key, b.Nonce, b.Ciphertext, b.Tag, adV2);
-
-                bodyPlain.Add(pt);
+                if (b.BlockKey != null && b.BlockKey.Length > 0)
+                    Array.Clear(b.BlockKey, 0, b.BlockKey.Length);
+                b.BlockKey = null;
             }
-
-            // Switch to V3 and rebuild the full chain securely
-            Version = V3;
-
-            // block 0 prevhash
-            if (_blocks.Count > 0)
-                _blocks[0].PrevHash = ZeroHash.ToArray();
-
-            for (int i = 0; i < _blocks.Count; i++)
-            {
-                var b = _blocks[i];
-                b.Index = i;
-
-                if (i == 0)
-                {
-                    b.PrevHash = ZeroHash.ToArray();
-                }
-                else
-                {
-                    // previous block hash is already V3 hash because we have re-encrypted previous in loop
-                    b.PrevHash = ComputeBlockHash(_blocks[i - 1]);
-                }
-
-                // Encrypt title + body with V3 AD
-                EncryptTitleInto(b, b.Title);
-                EncryptBodyInto(b, bodyPlain[i]);
-            }
-
-            // After upgrade, validate for sanity
-            if (!Validate(out string error))
-                throw new InvalidDataException("Upgrade failed: " + error);
         }
     }
 
     public sealed class RecipientEntry
     {
         public byte[] KeyId { get; set; } = Array.Empty<byte>();      // 32 bytes SHA-256(SPKI)
+        public byte[] PublicKeySpki { get; set; } = Array.Empty<byte>(); // V4 only (required in V4)
         public byte Alg { get; set; }                                  // 1 = RSA-OAEP-SHA256
-        public byte[] WrappedDek { get; set; } = Array.Empty<byte>();  // RSA-encrypted 32-byte DEK
+        public byte[] WrappedDek { get; set; } = Array.Empty<byte>();  // RSA-encrypted 32-byte container DEK
     }
 }

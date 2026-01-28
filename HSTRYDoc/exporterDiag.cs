@@ -120,6 +120,15 @@ namespace HSTRYDoc
                 {
                     var b = _container.Blocks[i];
 
+                    // V4: Block may be restricted. Skip it in exporter UI.
+                    if (_container.Version == HSTRYContainer.CurrentVersion)
+                    {
+                        // In V4, inaccessible blocks have Title "<restricted>" (from Validate) and GetRtfDocument will throw.
+                        // Best UX: do not show them for export.
+                        if (string.Equals(b.Title, "<restricted>", StringComparison.Ordinal))
+                            continue;
+                    }
+
                     string hashHex = string.Empty; // computed on demand
                     string size = ByteFormat.ToHumanSize(b.StoredSizeBytes);
 
@@ -317,6 +326,8 @@ namespace HSTRYDoc
         {
             Directory.CreateDirectory(folder);
 
+            int written = 0;
+
             for (int done = 0; done < indices.Count; done++)
             {
                 token.ThrowIfCancellationRequested();
@@ -332,13 +343,26 @@ namespace HSTRYDoc
                     Indeterminate = false
                 });
 
-                string rtf = _container.GetRtfDocument(i) ?? string.Empty;
+                string rtf;
+                try
+                {
+                    rtf = _container.GetRtfDocument(i) ?? string.Empty;
+                }
+                catch (UnauthorizedAccessException)
+                {
+                    // Skip restricted blocks
+                    continue;
+                }
 
                 string safe = MakeSafeFileName($"{i + 1:D4}_{b.Title}");
                 string path = Path.Combine(folder, safe + ".rtf");
 
                 File.WriteAllText(path, rtf, Encoding.UTF8);
+                written++;
             }
+
+            if (written == 0)
+                throw new InvalidOperationException("No readable blocks were exported.");
         }
 
         // ----------------------------
@@ -349,6 +373,7 @@ namespace HSTRYDoc
             Directory.CreateDirectory(folder);
 
             using var rtb = new RichTextBox();
+            int written = 0;
 
             for (int done = 0; done < indices.Count; done++)
             {
@@ -365,7 +390,16 @@ namespace HSTRYDoc
                     Indeterminate = false
                 });
 
-                string rtf = _container.GetRtfDocument(i) ?? string.Empty;
+                string rtf;
+                try
+                {
+                    rtf = _container.GetRtfDocument(i) ?? string.Empty;
+                }
+                catch (UnauthorizedAccessException)
+                {
+                    // Skip restricted blocks
+                    continue;
+                }
 
                 rtb.Rtf = rtf;
                 string text = rtb.Text ?? string.Empty;
@@ -374,7 +408,11 @@ namespace HSTRYDoc
                 string path = Path.Combine(folder, safe + ".txt");
 
                 File.WriteAllText(path, text, Encoding.UTF8);
+                written++;
             }
+
+            if (written == 0)
+                throw new InvalidOperationException("No readable blocks were exported.");
         }
 
         // ----------------------------
@@ -428,17 +466,12 @@ namespace HSTRYDoc
                     return;
                 }
 
-                if (blockPos >= indices.Count)
+                // Find next readable block (skip restricted)
+                while (blockPos < indices.Count && !loadedBlock)
                 {
-                    e.HasMorePages = false;
-                    return;
-                }
+                    int blockIndex = indices[blockPos];
+                    var b = _container.Blocks[blockIndex];
 
-                int blockIndex = indices[blockPos];
-                var b = _container.Blocks[blockIndex];
-
-                if (!loadedBlock)
-                {
                     progress.Report(new UiProgress
                     {
                         Message = $"Exporting PDF {blockPos + 1}/{indices.Count}: {b.Title}",
@@ -447,11 +480,28 @@ namespace HSTRYDoc
                         Indeterminate = false
                     });
 
-                    rtb.Rtf = _container.GetRtfDocument(blockIndex) ?? string.Empty;
-                    charPos = 0;
-                    loadedBlock = true;
+                    try
+                    {
+                        rtb.Rtf = _container.GetRtfDocument(blockIndex) ?? string.Empty;
+                        charPos = 0;
+                        loadedBlock = true;
+                    }
+                    catch (UnauthorizedAccessException)
+                    {
+                        // Skip restricted block
+                        blockPos++;
+                        loadedBlock = false;
+                        RichTextBoxPrintHelper.FormatRangeDone(rtb);
+                    }
                 }
 
+                if (blockPos >= indices.Count)
+                {
+                    e.HasMorePages = false;
+                    return;
+                }
+
+                // Print current loaded block
                 charPos = RichTextBoxPrintHelper.FormatRange(rtb, e, charPos, rtb.TextLength);
 
                 if (charPos < rtb.TextLength)
@@ -460,10 +510,12 @@ namespace HSTRYDoc
                     return;
                 }
 
+                // Finished this block
                 blockPos++;
                 loadedBlock = false;
                 RichTextBoxPrintHelper.FormatRangeDone(rtb);
 
+                // There might be more readable blocks
                 e.HasMorePages = blockPos < indices.Count;
             };
 

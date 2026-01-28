@@ -78,7 +78,7 @@ namespace HSTRYDoc
 
         }
 
-        private void UiKeyManagement()
+        private async void UiKeyManagement()
         {
             if (_container == null || string.IsNullOrWhiteSpace(_containerPath))
             {
@@ -87,6 +87,9 @@ namespace HSTRYDoc
                 return;
             }
 
+            // Remember current key path to detect changes
+            string? oldKeyPath = _privateKeyPath;
+
             using var dlg = new KeyManagerDialog(_container, _containerPath!, _privateKeyPath);
             if (dlg.ShowDialog(this) != DialogResult.OK)
                 return;
@@ -94,13 +97,14 @@ namespace HSTRYDoc
             // Update key path from dialog
             _privateKeyPath = dlg.SelectedPrivateKeyPath;
 
-            // Persist into AppState
+            // Persist into AppState (only if exists)
             if (!string.IsNullOrWhiteSpace(_privateKeyPath) && File.Exists(_privateKeyPath))
             {
                 _appState.PrivateKeyPath = _privateKeyPath;
                 _appState.Save();
             }
 
+            // If the dialog changed the container (recipients / block access), save it now.
             if (dlg.ContainerChanged)
             {
                 try
@@ -110,12 +114,91 @@ namespace HSTRYDoc
 
                     _container.Save(_containerPath!);
                     _containerDirty = false;
-                    UpdateUiState();
                 }
                 catch (Exception ex)
                 {
                     MessageBox.Show(this, ex.Message, "Key Management", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                    return;
                 }
+            }
+
+            // If user selected a different key in the dialog, we MUST reload the container
+            // so V4 per-block BEKs and rights get applied for the new identity.
+            bool keyChanged =
+                !string.Equals(oldKeyPath ?? string.Empty, _privateKeyPath ?? string.Empty, StringComparison.OrdinalIgnoreCase) &&
+                !string.IsNullOrWhiteSpace(_privateKeyPath) && File.Exists(_privateKeyPath);
+
+            if (keyChanged)
+            {
+                int keepIndex = _currentBlockIndex;
+
+                bool ok = await ReloadContainerWithPrivateKeyAsync(_containerPath!, _privateKeyPath!, keepIndex);
+                if (!ok)
+                    return;
+            }
+
+            UpdateUiState();
+        }
+
+        private async Task<bool> ReloadContainerWithPrivateKeyAsync(string containerPath, string privateKeyPath, int keepSelectedIndex)
+        {
+            try
+            {
+                HSTRYContainer loaded = await reporterDiag.RunAsync(
+                    owner: this,
+                    title: "Reloading container",
+                    work: async (progress, token) =>
+                    {
+                        progress.Report(new UiProgress
+                        {
+                            Message = "Reloading container ",
+                            Indeterminate = true
+                        });
+
+                        return await Task.Run(() => HSTRYContainer.LoadWithPrivateKeyFile(containerPath, privateKeyPath), token);
+                    });
+
+                // Stop background hash workers before swapping container
+                CancelHashWorkers();
+
+                _container?.CloseKeyMaterial();
+                _container = loaded;
+                _containerPath = containerPath;
+                _privateKeyPath = privateKeyPath;
+
+                _blockDirty = false;
+                _containerDirty = false;
+
+                RefreshBlockList(selectIndex: null);
+
+                int newIndex = -1;
+                if (_container.Blocks.Count > 0)
+                {
+                    newIndex = Math.Clamp(keepSelectedIndex, 0, _container.Blocks.Count - 1);
+                }
+
+                if (newIndex >= 0)
+                {
+                    SelectListIndex(newIndex);
+                    LoadBlockIntoEditor(newIndex);
+                }
+                else
+                {
+                    ClearEditor();
+                    splitContainer1.Panel2.Enabled = false;
+                }
+
+                RebuildAutoCompleteWordsFromEditor();
+                return true;
+            }
+            catch (OperationCanceledException)
+            {
+                return false;
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show(this, ex.Message, "Reload container", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                return false;
             }
         }
 
@@ -825,7 +908,7 @@ namespace HSTRYDoc
 
             try
             {
-                HSTRYContainer c = await reporterDiag.RunAsync(
+                HSTRYContainer loaded = await reporterDiag.RunAsync(
                     owner: this,
                     title: "Opening container",
                     work: async (progress, token) =>
@@ -836,15 +919,14 @@ namespace HSTRYDoc
                             Indeterminate = true
                         });
 
-                        HSTRYContainer loaded = await Task.Run(() => HSTRYContainer.LoadWithPrivateKeyFile(path, privPath), token);
-                        return loaded;
+                        return await Task.Run(() => HSTRYContainer.LoadWithPrivateKeyFile(path, privPath), token);
                     });
 
                 // IMPORTANT: stop running hash jobs before switching container/list
                 CancelHashWorkers();
 
                 _container?.CloseKeyMaterial();
-                _container = c;
+                _container = loaded;
                 _containerPath = path;
                 _privateKeyPath = privPath;
 
@@ -859,6 +941,10 @@ namespace HSTRYDoc
                 _appState.TouchRecentFile(path);
                 _appState.Save();
 
+                // NEW: Offer upgrade to V4 (Option A)
+                await MaybeOfferUpgradeToV4Async();
+
+                // After possible upgrade/reload, rebuild autocomplete
                 RebuildAutoCompleteWordsFromEditor();
                 return true;
             }
@@ -873,6 +959,167 @@ namespace HSTRYDoc
             }
         }
 
+        private async Task MaybeOfferUpgradeToV4Async()
+        {
+            if (_container == null || string.IsNullOrWhiteSpace(_containerPath))
+                return;
+
+            // Already V4 => nothing to do
+            if (_container.Version == HSTRYContainer.CurrentVersion)
+                return;
+
+            // Need owner key to upgrade (because upgrade rewrites recipients and resigns header)
+            if (string.IsNullOrWhiteSpace(_privateKeyPath) || !File.Exists(_privateKeyPath))
+                return;
+
+            bool isOwner;
+            try
+            {
+                using RSA priv = HSTRYContainer.RsaKeyFiles.LoadPrivateKeyPkcs8(_privateKeyPath!);
+                isOwner = priv.ExportSubjectPublicKeyInfo().SequenceEqual(_container.OwnerPublicKeySpki);
+            }
+            catch
+            {
+                return;
+            }
+
+            if (!isOwner)
+                return;
+
+            var ask = MessageBox.Show(
+                this,
+                "This container is an older format (V2/V3).\n\n" +
+                "Upgrade to V4 now to enable per-block access control?",
+                "Upgrade to V4",
+                MessageBoxButtons.YesNo,
+                MessageBoxIcon.Question,
+                MessageBoxDefaultButton.Button1);
+
+            if (ask != DialogResult.Yes)
+                return;
+
+            // Collect all recipients' public keys (required because V2/V3 header does NOT store SPKIs)
+            // We'll guide the user to select multiple .hstrypub files.
+            var pubs = await UiCollectRecipientPublicKeysForUpgradeAsync();
+            if (pubs == null || pubs.Count == 0)
+                return;
+
+            await UiUpgradeContainerToV4Async(pubs);
+        }
+
+
+        private async Task<List<RSA>?> UiCollectRecipientPublicKeysForUpgradeAsync()
+        {
+            if (_container == null) return null;
+
+            MessageBox.Show(
+                this,
+                "To upgrade to V4, you must provide the PUBLIC keys (.hstrypub) for ALL recipients currently in the container.\n\n" +
+                "Tip: Select multiple files at once.",
+                "Upgrade to V4",
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Information);
+
+            using var ofd = new OpenFileDialog
+            {
+                Filter = "HSTRY Public Key (*.hstrypub)|*.hstrypub|All files (*.*)|*.*",
+                Title = "Select ALL recipient public keys (.hstrypub)",
+                Multiselect = true,
+                CheckFileExists = true
+            };
+
+            if (ofd.ShowDialog(this) != DialogResult.OK)
+                return null;
+
+            if (ofd.FileNames == null || ofd.FileNames.Length == 0)
+                return null;
+
+            // Load RSA pubs
+            var list = new List<RSA>();
+            try
+            {
+                foreach (string f in ofd.FileNames)
+                {
+                    if (!File.Exists(f)) continue;
+                    // note: LoadPublicKeySpki returns RSA; must Dispose later after upgrade
+                    list.Add(HSTRYContainer.RsaKeyFiles.LoadPublicKeySpki(f));
+                }
+                return list;
+            }
+            catch (Exception ex)
+            {
+                // Dispose already loaded
+                foreach (var r in list) r.Dispose();
+                MessageBox.Show(this, ex.Message, "Upgrade to V4", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                return null;
+            }
+        }
+
+        private async Task UiUpgradeContainerToV4Async(List<RSA> recipientPubs)
+        {
+            if (_container == null || string.IsNullOrWhiteSpace(_containerPath) || string.IsNullOrWhiteSpace(_privateKeyPath))
+                return;
+
+            try
+            {
+                // Commit current block before rewriting everything
+                if (!MaybeCommitCurrentBlock())
+                    return;
+
+                await reporterDiag.RunAsync<object>(
+                    owner: this,
+                    title: "Upgrading to V4",
+                    work: async (progress, token) =>
+                    {
+                        progress.Report(new UiProgress
+                        {
+                            Message = "Upgrading container ",
+                            Indeterminate = true
+                        });
+
+                        await Task.Run(() =>
+                        {
+                            using RSA ownerPriv = HSTRYContainer.RsaKeyFiles.LoadPrivateKeyPkcs8(_privateKeyPath!);
+
+                            // Default for non-owner: Read access to all blocks after upgrade
+                            _container!.UpgradeToV4(ownerPriv, recipientPubs, nonOwnerDefaultRights: BlockRights.Read);
+
+                            // Save upgraded container
+                            _container!.Save(_containerPath!);
+                        }, token);
+
+                        return new object();
+                    });
+
+                // After upgrade we MUST reload to hydrate BEKs/rights for the active key cleanly.
+                int keepIndex = _currentBlockIndex;
+                await ReloadContainerWithPrivateKeyAsync(_containerPath!, _privateKeyPath!, keepIndex);
+
+                MessageBox.Show(
+                    this,
+                    "Upgrade completed.\n\nThe container is now V4 and supports per-block access control.",
+                    "Upgrade to V4",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Information);
+
+                _containerDirty = false;
+                UpdateUiState();
+            }
+            catch (OperationCanceledException)
+            {
+                // ignore
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show(this, ex.Message, "Upgrade to V4", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
+            finally
+            {
+                // Always dispose the RSA objects we created from pub files
+                foreach (var r in recipientPubs)
+                    r.Dispose();
+            }
+        }
 
         // ============================================================
         // UI wiring
@@ -1460,16 +1707,43 @@ namespace HSTRYDoc
             {
                 _loadingBlockIntoEditor = true;
 
+                // Try decrypt/load
                 string rtf = _container.GetRtfDocument(index);
+
                 rtfMainText.Rtf = rtf ?? string.Empty;
 
                 _currentBlockIndex = index;
                 _blockDirty = false;
 
-                ResetEditorScaleTo100();
+                splitContainer1.Panel2.Enabled = true;
 
+                ResetEditorScaleTo100();
                 UpdateRtfUiFromSelection();
-                
+            }
+            catch (UnauthorizedAccessException)
+            {
+                // V4: No read access to this block
+                _currentBlockIndex = index;
+                _blockDirty = false;
+
+                _loadingBlockIntoEditor = true;
+                try
+                {
+                    rtfMainText.Clear();
+                    rtfMainText.Text = "You do not have permission to open this block.";
+                }
+                finally
+                {
+                    _loadingBlockIntoEditor = false;
+                }
+
+                splitContainer1.Panel2.Enabled = false;
+
+                MessageBox.Show(this,
+                    "You do not have read access to this block.\n\nAsk the owner to grant access in Key Management.",
+                    "Access denied",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Warning);
             }
             catch (Exception ex)
             {
@@ -1588,7 +1862,7 @@ namespace HSTRYDoc
                 {
                     string hashText = computeSync
                         ? Convert.ToHexString(_container.ComputeBlockHash(b))
-                        : "Computing ";
+                        : ""; // IMPORTANT: empty means "not computed yet" for on-demand
 
                     string size = ByteFormat.ToHumanSize(b.StoredSizeBytes);
 
@@ -1618,7 +1892,6 @@ namespace HSTRYDoc
             if (!computeSync && total > 0)
                 StartHashFillAsync();
         }
-
 
         private void StartHashFillAsync()
         {
@@ -1707,8 +1980,12 @@ namespace HSTRYDoc
             // Hash column index 1 (Name is 0)
             if (item.SubItems.Count < 2) return;
 
-            // Already computed?
-            if (!string.IsNullOrWhiteSpace(item.SubItems[1].Text)) return;
+            string cur = item.SubItems[1].Text ?? string.Empty;
+
+            // Already computed? (Accept only a real hex string as computed)
+            // If it's empty or "Computing " we compute.
+            bool looksComputed = cur.Length >= 64 && cur.All(c => Uri.IsHexDigit(c));
+            if (looksComputed) return;
 
             if (item.Tag is not int idx) return;
             if (idx < 0 || idx >= _container.Blocks.Count) return;
@@ -1736,7 +2013,7 @@ namespace HSTRYDoc
             catch
             {
                 if (!token.IsCancellationRequested)
-                    item.SubItems[1].Text = string.Empty;
+                    item.SubItems[1].Text = "";
             }
         }
 
@@ -3232,55 +3509,7 @@ namespace HSTRYDoc
             await CreateTestBlocksAsync(count: 10000, minWordsPerBlock: 2500, maxWordsPerBlock: 5000);
         }
 
-        private void dataMasksToolStripMenuItem_Click(object sender, EventArgs e)
-        {
-            if (_container == null)
-            {
-                MessageBox.Show(this, "No container is currently open.", "Additional Data",
-                    MessageBoxButtons.OK, MessageBoxIcon.Information);
-                return;
-            }
-
-            // Avoid overwriting unsaved editor state when we reload later
-            if (!MaybeCommitCurrentBlock())
-                return;
-
-            using var dlg = new MaskedData(_container);
-            dlg.ShowDialog(this);
-
-            if (dlg.ContainerChanged)
-            {
-                _containerDirty = true;
-
-                // Stop background work that might update list / hashes while we rebuild
-                CancelHashWorkers();
-
-                // Prevent selection-change handlers from fighting our refresh/reload
-                _suppressBlockSelectionChanged = true;
-                try
-                {
-                    RefreshBlockList(selectIndex: _currentBlockIndex >= 0 ? _currentBlockIndex : null);
-
-                    // Requirement: reload currently selected block so user doesn't see stale data
-                    if (_currentBlockIndex >= 0)
-                        LoadBlockIntoEditor(_currentBlockIndex);
-                }
-                finally
-                {
-                    _suppressBlockSelectionChanged = false;
-                }
-            }
-            else
-            {
-                // Even if nothing changed, you *can* reload; requirement says reload on close to avoid stale data.
-                // If you only want this when changed, remove this block.
-                if (_currentBlockIndex >= 0)
-                    LoadBlockIntoEditor(_currentBlockIndex);
-            }
-
-            UpdateUiState();
-        }
-
+        
         private void toolButtonFontstyle_Click(object sender, EventArgs e)
         {
             Font current = rtfMainText.SelectionFont ?? rtfMainText.Font;

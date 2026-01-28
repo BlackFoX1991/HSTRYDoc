@@ -116,7 +116,6 @@
             searchInContainerToolStripMenuItem = new ToolStripMenuItem();
             keyManagementToolStripMenuItem = new ToolStripMenuItem();
             keyLookupExternalDriveToolStripMenuItem = new ToolStripMenuItem();
-            dataMasksToolStripMenuItem = new ToolStripMenuItem();
             helpToolStripMenuItem = new ToolStripMenuItem();
             aboutToolStripMenuItem = new ToolStripMenuItem();
             InactiveIcon = new NotifyIcon(components);
@@ -330,7 +329,7 @@
             mainshadowPanel.Location = new Point(3, 3);
             mainshadowPanel.MaxAlpha = 140;
             mainshadowPanel.Name = "mainshadowPanel";
-            mainshadowPanel.Padding = new Padding(8);
+            mainshadowPanel.Padding = new Padding(0, 0, 7, 7);
             mainshadowPanel.ShadowOffsetX = 2;
             mainshadowPanel.ShadowOffsetY = 2;
             mainshadowPanel.ShadowSize = 5;
@@ -343,9 +342,9 @@
             rtfMainText.ContextMenuStrip = ctxRtf;
             rtfMainText.Dock = DockStyle.Fill;
             rtfMainText.EnableAutoDragDrop = true;
-            rtfMainText.Location = new Point(8, 8);
+            rtfMainText.Location = new Point(0, 0);
             rtfMainText.Name = "rtfMainText";
-            rtfMainText.Size = new Size(614, 512);
+            rtfMainText.Size = new Size(623, 521);
             rtfMainText.TabIndex = 0;
             rtfMainText.Text = "";
             // 
@@ -445,9 +444,9 @@
             pnlScales.Controls.Add(rtfScaleBar);
             pnlScales.Controls.Add(panel3);
             pnlScales.Dock = DockStyle.Bottom;
-            pnlScales.Location = new Point(8, 520);
+            pnlScales.Location = new Point(0, 521);
             pnlScales.Name = "pnlScales";
-            pnlScales.Size = new Size(614, 22);
+            pnlScales.Size = new Size(623, 22);
             pnlScales.TabIndex = 2;
             // 
             // rtfScaleBar
@@ -456,7 +455,7 @@
             rtfScaleBar.BackColor = Color.White;
             rtfScaleBar.Dock = DockStyle.Right;
             rtfScaleBar.LargeChange = 25;
-            rtfScaleBar.Location = new Point(348, 0);
+            rtfScaleBar.Location = new Point(357, 0);
             rtfScaleBar.Maximum = 400;
             rtfScaleBar.Minimum = 25;
             rtfScaleBar.Name = "rtfScaleBar";
@@ -826,7 +825,7 @@
             // 
             // toolsToolStripMenuItem
             // 
-            toolsToolStripMenuItem.DropDownItems.AddRange(new ToolStripItem[] { searchInBlockToolStripMenuItem, searchInContainerToolStripMenuItem, keyManagementToolStripMenuItem, dataMasksToolStripMenuItem });
+            toolsToolStripMenuItem.DropDownItems.AddRange(new ToolStripItem[] { searchInBlockToolStripMenuItem, searchInContainerToolStripMenuItem, keyManagementToolStripMenuItem });
             toolsToolStripMenuItem.Name = "toolsToolStripMenuItem";
             toolsToolStripMenuItem.Size = new Size(47, 20);
             toolsToolStripMenuItem.Text = "Tools";
@@ -835,14 +834,14 @@
             // 
             searchInBlockToolStripMenuItem.Image = (Image)resources.GetObject("searchInBlockToolStripMenuItem.Image");
             searchInBlockToolStripMenuItem.Name = "searchInBlockToolStripMenuItem";
-            searchInBlockToolStripMenuItem.Size = new Size(225, 22);
+            searchInBlockToolStripMenuItem.Size = new Size(190, 26);
             searchInBlockToolStripMenuItem.Text = "Search in Block...";
             // 
             // searchInContainerToolStripMenuItem
             // 
             searchInContainerToolStripMenuItem.Image = (Image)resources.GetObject("searchInContainerToolStripMenuItem.Image");
             searchInContainerToolStripMenuItem.Name = "searchInContainerToolStripMenuItem";
-            searchInContainerToolStripMenuItem.Size = new Size(225, 22);
+            searchInContainerToolStripMenuItem.Size = new Size(190, 26);
             searchInContainerToolStripMenuItem.Text = "Search in Container...";
             // 
             // keyManagementToolStripMenuItem
@@ -850,7 +849,7 @@
             keyManagementToolStripMenuItem.DropDownItems.AddRange(new ToolStripItem[] { keyLookupExternalDriveToolStripMenuItem });
             keyManagementToolStripMenuItem.Image = (Image)resources.GetObject("keyManagementToolStripMenuItem.Image");
             keyManagementToolStripMenuItem.Name = "keyManagementToolStripMenuItem";
-            keyManagementToolStripMenuItem.Size = new Size(225, 22);
+            keyManagementToolStripMenuItem.Size = new Size(190, 26);
             keyManagementToolStripMenuItem.Text = "Key Management";
             keyManagementToolStripMenuItem.Click += keyManagementToolStripMenuItem_Click;
             // 
@@ -860,14 +859,6 @@
             keyLookupExternalDriveToolStripMenuItem.Name = "keyLookupExternalDriveToolStripMenuItem";
             keyLookupExternalDriveToolStripMenuItem.Size = new Size(212, 22);
             keyLookupExternalDriveToolStripMenuItem.Text = "Key-Lookup external Drive";
-            // 
-            // dataMasksToolStripMenuItem
-            // 
-            dataMasksToolStripMenuItem.Image = (Image)resources.GetObject("dataMasksToolStripMenuItem.Image");
-            dataMasksToolStripMenuItem.Name = "dataMasksToolStripMenuItem";
-            dataMasksToolStripMenuItem.Size = new Size(225, 22);
-            dataMasksToolStripMenuItem.Text = "Defined Data Management...";
-            dataMasksToolStripMenuItem.Click += dataMasksToolStripMenuItem_Click;
             // 
             // helpToolStripMenuItem
             // 
@@ -880,7 +871,7 @@
             // 
             aboutToolStripMenuItem.Image = (Image)resources.GetObject("aboutToolStripMenuItem.Image");
             aboutToolStripMenuItem.Name = "aboutToolStripMenuItem";
-            aboutToolStripMenuItem.Size = new Size(116, 22);
+            aboutToolStripMenuItem.Size = new Size(184, 26);
             aboutToolStripMenuItem.Text = "About...";
             aboutToolStripMenuItem.Click += aboutToolStripMenuItem_Click;
             // 
@@ -1011,7 +1002,6 @@
         private ToolStripButton btnTestblocks;
         private ToolStripSeparator toolStripSeparator5;
         private ToolStripMenuItem keyLookupExternalDriveToolStripMenuItem;
-        private ToolStripMenuItem dataMasksToolStripMenuItem;
         private ToolStripButton toolButtonFontstyle;
         private TrackBar rtfScaleBar;
         private Panel pnlScales;
