@@ -28,6 +28,232 @@ namespace HSTRYDoc
 {
     public sealed class HSTRYContainer
     {
+
+
+        public void GrantReadAllBlocks(RSA ownerPrivateKey, RSA recipientPublicKey, IProgress<UiProgress> progress, CancellationToken token)
+        {
+            BulkSetAccessAllBlocks(ownerPrivateKey, recipientPublicKey, recipientPublicKeyKeyId: null,
+                mode: BulkAccessMode.GrantReadIfMissing, rights: BlockRights.Read, progress: progress, token: token);
+        }
+
+        public void GrantWriteAllBlocks(RSA ownerPrivateKey, RSA recipientPublicKey, IProgress<UiProgress> progress, CancellationToken token)
+        {
+            BulkSetAccessAllBlocks(ownerPrivateKey, recipientPublicKey, recipientPublicKeyKeyId: null,
+                mode: BulkAccessMode.GrantOverwrite, rights: (BlockRights.Read | BlockRights.Write), progress: progress, token: token);
+        }
+
+        public void RevokeAllBlocks(RSA ownerPrivateKey, byte[] recipientKeyId, IProgress<UiProgress> progress, CancellationToken token)
+        {
+            if (recipientKeyId == null || recipientKeyId.Length == 0)
+                throw new ArgumentException("recipientKeyId is required.", nameof(recipientKeyId));
+
+            BulkSetAccessAllBlocks(ownerPrivateKey, recipientPublicKey: null, recipientPublicKeyKeyId: recipientKeyId,
+                mode: BulkAccessMode.Revoke, rights: BlockRights.None, progress: progress, token: token);
+        }
+
+        // ------------------ internal bulk engine (O(n)) ------------------
+
+        private enum BulkAccessMode
+        {
+            GrantReadIfMissing, // only add if recipient has no slot with Read already
+            GrantOverwrite,     // overwrite slot to exact rights
+            Revoke              // remove slot
+        }
+
+        private void BulkSetAccessAllBlocks(
+            RSA ownerPrivateKey,
+            RSA? recipientPublicKey,
+            byte[]? recipientPublicKeyKeyId,
+            BulkAccessMode mode,
+            BlockRights rights,
+            IProgress<UiProgress> progress,
+            CancellationToken token)
+        {
+            if (Version != V4)
+                throw new InvalidOperationException("Bulk access operations require V4.");
+
+            EnsureKey();
+            EnsureOwnerPrivateKeyMatches(ownerPrivateKey);
+
+            int n = _blocks.Count;
+            if (n == 0)
+                return;
+
+            // Determine recipient KeyId
+            byte[] recipientKeyId;
+            if (recipientPublicKey != null)
+            {
+                byte[] spki = recipientPublicKey.ExportSubjectPublicKeyInfo();
+                recipientKeyId = SHA256.HashData(spki);
+            }
+            else
+            {
+                recipientKeyId = recipientPublicKeyKeyId!;
+            }
+
+            // Ensure recipient exists in header (membership), except revoke (allow revoking even if removed later)
+            if (mode != BulkAccessMode.Revoke && !_recipients.Any(r => r.KeyId.SequenceEqual(recipientKeyId)))
+                throw new InvalidOperationException("Recipient is not in container recipients. AddRecipient(...) first.");
+
+            // Phase 1: decrypt every block once (using owner slot) and capture plaintexts + BEKs
+            var titles = new string[n];
+            var bodies = new byte[n][];
+            var beks = new byte[n][];
+
+            progress.Report(new UiProgress
+            {
+                Message = "Decrypting blocks…",
+                Indeterminate = false,
+                Maximum = n,
+                Value = 0
+            });
+
+            for (int i = 0; i < n; i++)
+            {
+                token.ThrowIfCancellationRequested();
+
+                var b = _blocks[i];
+
+                // Get BEK using owner slot
+                byte[] bek = b.BlockKey ?? Array.Empty<byte>();
+                if (bek.Length != 32)
+                {
+                    var ownerSlot = b.KeySlots.FirstOrDefault(s => s.KeyId.SequenceEqual(OwnerKeyId));
+                    if (ownerSlot == null)
+                        throw new CryptographicException($"Owner KeySlot missing at block {i}.");
+
+                    if (ownerSlot.Alg != RECIPIENT_ALG_RSA_OAEP_SHA256)
+                        throw new CryptographicException("Unsupported block key algorithm.");
+
+                    bek = ownerPrivateKey.Decrypt(ownerSlot.WrappedBek, RSAEncryptionPadding.OaepSHA256);
+                    if (bek == null || bek.Length != 32)
+                        throw new CryptographicException("Invalid BEK length.");
+
+                    b.BlockKey = bek; // cache for this session
+                    b.MyRights = BlockRights.Read | BlockRights.Write; // owner, for this session
+                }
+
+                // Decrypt plaintext using CURRENT AD (prevhash + accessHash)
+                string titlePt = DecryptTitleV4OrThrow(b);
+                byte[] bodyPt = DecryptBodyV4OrThrow(b);
+
+                titles[i] = titlePt;
+                bodies[i] = bodyPt;
+                beks[i] = bek;
+
+                progress.Report(new UiProgress
+                {
+                    Message = $"Decrypting blocks… {i + 1}/{n}",
+                    Indeterminate = false,
+                    Maximum = n,
+                    Value = i + 1
+                });
+            }
+
+            // Phase 2: update slots (no re-encrypt yet)
+            progress.Report(new UiProgress
+            {
+                Message = "Updating access lists…",
+                Indeterminate = false,
+                Maximum = n,
+                Value = 0
+            });
+
+            for (int i = 0; i < n; i++)
+            {
+                token.ThrowIfCancellationRequested();
+
+                var b = _blocks[i];
+
+                if (mode == BulkAccessMode.Revoke)
+                {
+                    b.KeySlots.RemoveAll(s => s.KeyId.SequenceEqual(recipientKeyId));
+                }
+                else
+                {
+                    var existing = b.KeySlots.FirstOrDefault(s => s.KeyId.SequenceEqual(recipientKeyId));
+
+                    if (mode == BulkAccessMode.GrantReadIfMissing)
+                    {
+                        if (existing != null && (existing.Rights & BlockRights.Read) != 0)
+                        {
+                            // already has read (or read+write) -> keep as-is
+                            progress.Report(new UiProgress { Message = $"Updating access lists… {i + 1}/{n}", Maximum = n, Value = i + 1, Indeterminate = false });
+                            continue;
+                        }
+                    }
+
+                    // overwrite slot
+                    if (existing != null)
+                        b.KeySlots.Remove(existing);
+
+                    byte[] wrappedBek = recipientPublicKey!.Encrypt(beks[i], RSAEncryptionPadding.OaepSHA256);
+                    b.KeySlots.Add(new BlockKeySlot
+                    {
+                        KeyId = recipientKeyId,
+                        Rights = rights,
+                        Alg = RECIPIENT_ALG_RSA_OAEP_SHA256,
+                        WrappedBek = wrappedBek
+                    });
+                }
+
+                progress.Report(new UiProgress
+                {
+                    Message = $"Updating access lists… {i + 1}/{n}",
+                    Indeterminate = false,
+                    Maximum = n,
+                    Value = i + 1
+                });
+            }
+
+            // Phase 3: rebuild chain once (encrypt each block once)
+            progress.Report(new UiProgress
+            {
+                Message = "Rebuilding chain…",
+                Indeterminate = false,
+                Maximum = n,
+                Value = 0
+            });
+
+            // block 0 prevhash
+            _blocks[0].PrevHash = ZeroHash.ToArray();
+
+            for (int i = 0; i < n; i++)
+            {
+                token.ThrowIfCancellationRequested();
+
+                var b = _blocks[i];
+                b.Index = i;
+
+                if (i == 0)
+                    b.PrevHash = ZeroHash.ToArray();
+                else
+                    b.PrevHash = ComputeBlockHash(_blocks[i - 1]); // previous already re-encrypted
+
+                // Keep plaintext title in memory for UI
+                b.Title = titles[i];
+
+                EncryptTitleIntoV4(b, beks[i], titles[i]);
+                EncryptBodyIntoV4(b, beks[i], bodies[i]);
+
+                progress.Report(new UiProgress
+                {
+                    Message = $"Rebuilding chain… {i + 1}/{n}",
+                    Indeterminate = false,
+                    Maximum = n,
+                    Value = i + 1
+                });
+            }
+
+            // cleanup references (helps GC)
+            for (int i = 0; i < n; i++)
+            {
+                bodies[i] = Array.Empty<byte>();
+                titles[i] = string.Empty;
+                beks[i] = Array.Empty<byte>();
+            }
+        }
+
         // Current on-disk format
         public const byte CurrentVersion = 4;
 
@@ -142,6 +368,10 @@ namespace HSTRYDoc
         /// - recipients are the public keys that can open the container (should include owner).
         /// - By default, new blocks grant Read to all recipients and Read|Write to owner.
         /// </summary>
+        // =======================
+        // FIXED (complete): CreateNewForRecipients (sets _activeKeyId for new container session)
+        // Variant 1 semantics: blocks default to Owner RW, others None (handled in AddRtfDocument).
+        // =======================
         public static HSTRYContainer CreateNewForRecipients(
             RSA ownerPrivateKey,
             IEnumerable<RSA> recipientPublicKeys,
@@ -166,6 +396,9 @@ namespace HSTRYDoc
             c.OwnerPublicKeySpki = ownerPrivateKey.ExportSubjectPublicKeyInfo();
             c.HeaderSignatureAlg = HEADER_SIGALG_RSA_PSS_SHA256;
 
+            // IMPORTANT: set active identity for this in-memory session (creator = owner)
+            c._activeKeyId = SHA256.HashData(c.OwnerPublicKeySpki);
+
             // Generate container DEK (membership key, AES-256)
             c._key = new byte[32];
             RandomNumberGenerator.Fill(c._key);
@@ -187,7 +420,8 @@ namespace HSTRYDoc
             }
 
             // Ensure unique KeyIds
-            if (c._recipients.Select(r => Convert.ToHexString(r.KeyId)).Distinct(StringComparer.OrdinalIgnoreCase).Count() != c._recipients.Count)
+            if (c._recipients.Select(r => Convert.ToHexString(r.KeyId))
+                .Distinct(StringComparer.OrdinalIgnoreCase).Count() != c._recipients.Count)
                 throw new InvalidOperationException("Duplicate recipient keys detected (KeyId collision).");
 
             // Sign header
@@ -195,6 +429,7 @@ namespace HSTRYDoc
 
             return c;
         }
+
 
         public static HSTRYContainer LoadWithPrivateKeyFile(string containerPath, string privateKeyPath)
         {
@@ -961,12 +1196,20 @@ namespace HSTRYDoc
         /// - Owner: Read|Write
         /// - Other recipients: Read
         /// </summary>
+        // =======================
+        // FIXED (complete): AddRtfDocument (Variant 1: owner RW, others None)
+        // =======================
         public Block AddRtfDocument(string title, string rtf)
         {
             if (Version != V4)
                 throw new InvalidOperationException("AddRtfDocument is only supported in V4.");
 
             EnsureKey();
+
+            // Safety: if container was created in-memory without LoadWithPrivateKey,
+            // ensure active identity is at least owner
+            if (_activeKeyId == null || _activeKeyId.Length == 0)
+                _activeKeyId = OwnerKeyId;
 
             title ??= GenerateUniqueTitle();
 
@@ -983,14 +1226,17 @@ namespace HSTRYDoc
             b.BlockKey = new byte[32];
             RandomNumberGenerator.Fill(b.BlockKey);
 
-            // Default slots: owner RW, others R
+            // Variant 1: Default slots: owner Read|Write, everyone else None
             b.KeySlots.Clear();
             foreach (var r in _recipients)
             {
                 using var rsaPub = RSA.Create();
                 rsaPub.ImportSubjectPublicKeyInfo(r.PublicKeySpki, out _);
 
-                var rights = r.KeyId.SequenceEqual(OwnerKeyId) ? (BlockRights.Read | BlockRights.Write) : BlockRights.Read;
+                var rights = r.KeyId.SequenceEqual(OwnerKeyId)
+                    ? (BlockRights.Read | BlockRights.Write)
+                    : BlockRights.None;
+
                 byte[] wrappedBek = rsaPub.Encrypt(b.BlockKey, RSAEncryptionPadding.OaepSHA256);
 
                 b.KeySlots.Add(new BlockKeySlot
@@ -1037,6 +1283,9 @@ namespace HSTRYDoc
             return GetContainerEncoding().GetString(bodyPt);
         }
 
+        // =======================
+        // FIXED (complete): UpdateRtfDocument (V4) – correct AD order + rollback on failure
+        // =======================
         public void UpdateRtfDocument(int index, string newRtf)
         {
             EnsureKey();
@@ -1045,25 +1294,48 @@ namespace HSTRYDoc
             if (Version != V4)
                 throw new InvalidOperationException("UpdateRtfDocument is only supported in V4.");
 
+            // Chain requirement: write access to this + all subsequent blocks
             EnsureWritableFrom(index);
 
             if (b.BlockKey == null)
                 throw new UnauthorizedAccessException("No access to this block.");
 
-            // Decrypt existing body first (because ModifiedUtc is in AD)
-            byte[] oldAdBody = BlockAuth.BuildAssociatedData(V4, b, AD_PURPOSE_BODY);
-            byte[] bodyPtOld = Crypto.DecryptAesGcm(b.BlockKey, b.Nonce, b.Ciphertext, b.Tag, oldAdBody);
+            // IMPORTANT: decrypt using OLD AD first (before changing ModifiedUtc)
+            DateTimeOffset oldModified = b.ModifiedUtc;
 
-            b.ModifiedUtc = DateTimeOffset.UtcNow;
+            string oldTitle;
+            try
+            {
+                oldTitle = DecryptTitleV4OrThrow(b); // uses current (old) ModifiedUtc
+                                                     // Optional sanity check (can be removed for speed):
+                _ = DecryptBodyV4OrThrow(b);
+            }
+            catch
+            {
+                // do not mutate anything if decrypt fails
+                throw;
+            }
 
-            // Update title payload too because ModifiedUtc is in AD
-            string titlePt = DecryptTitleV4OrThrow(b);
-            EncryptTitleIntoV4(b, b.BlockKey, titlePt);
+            try
+            {
+                b.ModifiedUtc = DateTimeOffset.UtcNow;
 
-            byte[] pt = GetContainerEncoding().GetBytes(newRtf ?? string.Empty);
-            EncryptBodyIntoV4(b, b.BlockKey, pt);
+                // Re-encrypt title because ModifiedUtc is in AD
+                EncryptTitleIntoV4(b, b.BlockKey, oldTitle);
 
-            ReencryptFromV4(index + 1);
+                // Encrypt new body
+                byte[] pt = GetContainerEncoding().GetBytes(newRtf ?? string.Empty);
+                EncryptBodyIntoV4(b, b.BlockKey, pt);
+
+                // Fix chain forward
+                ReencryptFromV4(index + 1);
+            }
+            catch
+            {
+                // Roll back ModifiedUtc if anything fails (prevents corruption)
+                b.ModifiedUtc = oldModified;
+                throw;
+            }
         }
 
         public void RemoveBlock(int index)

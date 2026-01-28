@@ -1,10 +1,19 @@
-﻿// KeyManagerDialog.cs (updated for V4 Option A: per-block access control)
+﻿// KeyManagerDialog.cs (V4 Option A: per-block access control + ASYNC bulk ops)
+// Behavior:
+// - Grant write (all): applies Read+Write to ALL blocks (async + reporterDiag)
+// - Grant read (selected): applies Read to the currently selected block (only if not already granted)
+// - Grant read (all): applies Read to ALL blocks (only if not already granted) (async + reporterDiag)
+// - Revoke (selected): revokes access on selected blocks
+// - Revoke all: revokes access on ALL blocks (async + reporterDiag)
+
 using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Security.Cryptography;
+using System.Threading;
+using System.Threading.Tasks;
 using System.Windows.Forms;
 using System.Drawing;
 
@@ -41,10 +50,14 @@ namespace HSTRYDoc
             btnRemoveRecipient.Click += (_, __) => UiRemoveSelectedRecipient();
             btnCopyKeyId.Click += (_, __) => UiCopySelectedKeyId();
 
-            // Block access (V4)
-            btnGrantRead.Click += (_, __) => UiGrantSelectedBlocks(BlockRights.Read);
-            btnGrantWrite.Click += (_, __) => UiGrantSelectedBlocks(BlockRights.Read | BlockRights.Write);
-            btnRevokeAccess.Click += (_, __) => UiRevokeSelectedBlocks();
+            // Block access
+            btnGrantRead.Click += (_, __) => UiGrantReadSelectedBlock();                 // selected only (sync)
+            btnRevokeAccess.Click += (_, __) => UiRevokeSelectedBlocks();                // selected only (sync)
+
+            // Bulk (async + reporterDiag)
+            btnGrantReadAll.Click += async (_, __) => await UiGrantReadAllBlocksAsync();
+            btnGrantWrite.Click += async (_, __) => await UiGrantWriteAllBlocksAsync(); // Read+Write for ALL
+            btnRevokeAll.Click += async (_, __) => await UiRevokeAllBlocksAsync();
 
             btnOk.Click += (_, __) => { DialogResult = DialogResult.OK; Close(); };
             btnCancel.Click += (_, __) => { DialogResult = DialogResult.Cancel; Close(); };
@@ -53,7 +66,13 @@ namespace HSTRYDoc
             lvwRecipients.AllowDrop = true;
             lvwRecipients.DragEnter += LvwRecipients_DragEnter;
             lvwRecipients.DragDrop += LvwRecipients_DragDrop;
+
+            // Refresh blocks view when changing selected recipient
             lvwRecipients.SelectedIndexChanged += (_, __) => RefreshBlocksList();
+
+            // Update enabled state when selecting blocks
+            lvwBlocks.SelectedIndexChanged += (_, __) => UpdateMyRecipientStatusAndPermissions();
+            lvwBlocks.ItemSelectionChanged += (_, __) => UpdateMyRecipientStatusAndPermissions();
 
             RefreshRecipientsList();
 
@@ -66,18 +85,20 @@ namespace HSTRYDoc
             RefreshBlocksList();
         }
 
-        private static string DefaultPrivPath(string containerPath) => Path.ChangeExtension(containerPath, ".hstrypriv");
-        private static string DefaultPubPath(string containerPath) => Path.ChangeExtension(containerPath, ".hstrypub");
+        private void SetUiBusy(bool busy)
+        {
+            // Keep cancel/ok behavior simple: while busy, prevent operations
+            grpMyKeys.Enabled = !busy;
+            grpRecipients.Enabled = !busy;
+            grpBlockAccess.Enabled = !busy;
+
+            btnOk.Enabled = !busy;
+            btnCancel.Enabled = !busy;
+        }
 
         private void LvwRecipients_DragEnter(object? sender, DragEventArgs e)
         {
-            if (!_isOwnerKeyLoaded)
-            {
-                e.Effect = DragDropEffects.None;
-                return;
-            }
-
-            if (_container.Version != HSTRYContainer.CurrentVersion)
+            if (!_isOwnerKeyLoaded || _container.Version != HSTRYContainer.CurrentVersion)
             {
                 e.Effect = DragDropEffects.None;
                 return;
@@ -129,11 +150,11 @@ namespace HSTRYDoc
             if (added > 0)
             {
                 RefreshRecipientsList();
-                UpdateMyRecipientStatusAndPermissions();
                 RefreshBlocksList();
+                UpdateMyRecipientStatusAndPermissions();
 
                 MessageBox.Show(this,
-                    "Recipients added.\n\nNote: New recipients have NO block access by default in V4.\nSelect the recipient and grant access in 'Block access (V4)'.",
+                    "Recipients added.\n\nNote: New recipients have NO block access by default in V4.\nSelect the recipient and use the Block access tools below.",
                     "Recipients",
                     MessageBoxButtons.OK,
                     MessageBoxIcon.Information);
@@ -153,8 +174,8 @@ namespace HSTRYDoc
                 return;
 
             TryLoadMyPrivateKey(ofd.FileName, showErrors: true);
-            UpdateMyRecipientStatusAndPermissions();
             RefreshBlocksList();
+            UpdateMyRecipientStatusAndPermissions();
         }
 
         private void TryLoadMyPrivateKey(string path, bool showErrors)
@@ -210,7 +231,7 @@ namespace HSTRYDoc
         }
 
         // ============================================================
-        // Create new keypair (this is how you "create a new public key")
+        // Create new keypair
         // ============================================================
         private void UiCreateKeyPairForSharing()
         {
@@ -276,11 +297,11 @@ namespace HSTRYDoc
                         _container.AddRecipient(_myPrivateKey, pub);
                         ContainerChanged = true;
                         RefreshRecipientsList();
-                        UpdateMyRecipientStatusAndPermissions();
                         RefreshBlocksList();
+                        UpdateMyRecipientStatusAndPermissions();
 
                         MessageBox.Show(this,
-                            "Recipient added.\n\nNote: New recipients have NO block access by default in V4.\nSelect the recipient and grant access in 'Block access (V4)'.",
+                            "Recipient added.\n\nNote: New recipients have NO block access by default in V4.",
                             "Create key pair",
                             MessageBoxButtons.OK,
                             MessageBoxIcon.Information);
@@ -310,7 +331,7 @@ namespace HSTRYDoc
 
             string defaultPub = !string.IsNullOrWhiteSpace(SelectedPrivateKeyPath)
                 ? Path.ChangeExtension(SelectedPrivateKeyPath, ".hstrypub")
-                : DefaultPubPath(_containerPath);
+                : Path.ChangeExtension(_containerPath, ".hstrypub");
 
             using var sfd = new SaveFileDialog
             {
@@ -336,9 +357,6 @@ namespace HSTRYDoc
             }
         }
 
-        // ============================================================
-        // Ownership transfer
-        // ============================================================
         private void UiTransferOwnership()
         {
             if (_myPrivateKey == null)
@@ -418,8 +436,8 @@ namespace HSTRYDoc
 
                 TryLoadMyPrivateKey(newPrivPath, showErrors: true);
                 RefreshRecipientsList();
-                UpdateMyRecipientStatusAndPermissions();
                 RefreshBlocksList();
+                UpdateMyRecipientStatusAndPermissions();
 
                 MessageBox.Show(this,
                     "Ownership transferred successfully.\n\nThe new owner key pair has been saved to disk.",
@@ -436,6 +454,7 @@ namespace HSTRYDoc
         // ============================================================
         // Recipient operations (owner-only)
         // ============================================================
+
         private void UiAddMyselfAsRecipient()
         {
             if (_myPrivateKey == null || string.IsNullOrWhiteSpace(_myKeyIdHex))
@@ -478,14 +497,8 @@ namespace HSTRYDoc
 
                 ContainerChanged = true;
                 RefreshRecipientsList();
-                UpdateMyRecipientStatusAndPermissions();
                 RefreshBlocksList();
-
-                MessageBox.Show(this,
-                    "Recipient added.\n\nNote: New recipients have NO block access by default in V4.\nSelect the recipient and grant access in 'Block access (V4)'.",
-                    "Add myself",
-                    MessageBoxButtons.OK,
-                    MessageBoxIcon.Information);
+                UpdateMyRecipientStatusAndPermissions();
             }
             catch (Exception ex)
             {
@@ -537,14 +550,8 @@ namespace HSTRYDoc
 
                 ContainerChanged = true;
                 RefreshRecipientsList();
-                UpdateMyRecipientStatusAndPermissions();
                 RefreshBlocksList();
-
-                MessageBox.Show(this,
-                    "Recipient added.\n\nNote: New recipients have NO block access by default in V4.\nSelect the recipient and grant access in 'Block access (V4)'.",
-                    "Add recipient",
-                    MessageBoxButtons.OK,
-                    MessageBoxIcon.Information);
+                UpdateMyRecipientStatusAndPermissions();
             }
             catch (Exception ex)
             {
@@ -578,7 +585,7 @@ namespace HSTRYDoc
 
             var res = MessageBox.Show(
                 this,
-                "Remove the selected recipient from this container?\n\nThis does NOT automatically revoke existing block access.\nUse 'Revoke access' per block if needed.",
+                "Remove the selected recipient from this container?\n\nThis does NOT automatically revoke existing block access.\nUse 'Revoke all' if you want to remove all block rights for this recipient.",
                 "Remove recipient",
                 MessageBoxButtons.YesNo,
                 MessageBoxIcon.Warning,
@@ -593,8 +600,8 @@ namespace HSTRYDoc
                 {
                     ContainerChanged = true;
                     RefreshRecipientsList();
-                    UpdateMyRecipientStatusAndPermissions();
                     RefreshBlocksList();
+                    UpdateMyRecipientStatusAndPermissions();
                 }
             }
             catch (Exception ex)
@@ -631,9 +638,7 @@ namespace HSTRYDoc
                     it.SubItems.Add(len);
                     it.SubItems.Add(spkiLen);
 
-                    // store keyId for lookup
                     it.Tag = keyIdHex;
-
                     lvwRecipients.Items.Add(it);
                 }
             }
@@ -646,6 +651,7 @@ namespace HSTRYDoc
         private void UpdateMyRecipientStatusAndPermissions()
         {
             bool hasKey = _myPrivateKey != null && !string.IsNullOrWhiteSpace(_myKeyIdHex);
+
             bool included = hasKey && _container.Recipients.Any(r =>
                 Convert.ToHexString(r.KeyId).Equals(_myKeyIdHex!, StringComparison.OrdinalIgnoreCase));
 
@@ -655,13 +661,22 @@ namespace HSTRYDoc
             btnAddRecipient.Enabled = canModify;
             btnRemoveRecipient.Enabled = canModify;
             btnAddMyself.Enabled = canModify && !included;
-            btnTransferOwnership.Enabled = canModify; // only owner can transfer
+            btnTransferOwnership.Enabled = canModify;
 
-            // Block access buttons (owner-only)
             bool hasRecipientSelection = lvwRecipients.SelectedItems.Count > 0;
-            btnGrantRead.Enabled = canModify && hasRecipientSelection && lvwBlocks.SelectedItems.Count > 0;
-            btnGrantWrite.Enabled = canModify && hasRecipientSelection && lvwBlocks.SelectedItems.Count > 0;
-            btnRevokeAccess.Enabled = canModify && hasRecipientSelection && lvwBlocks.SelectedItems.Count > 0;
+            bool hasBlockSelection = lvwBlocks.SelectedItems.Count > 0;
+            bool hasAnyBlocks = _container.Blocks.Count > 0;
+
+            grpBlockAccess.Enabled = isV4;
+
+            // Selected-only buttons
+            btnGrantRead.Enabled = canModify && hasRecipientSelection && hasBlockSelection;
+            btnRevokeAccess.Enabled = canModify && hasRecipientSelection && hasBlockSelection;
+
+            // All-block buttons
+            btnGrantWrite.Enabled = canModify && hasRecipientSelection && hasAnyBlocks;
+            btnGrantReadAll.Enabled = canModify && hasRecipientSelection && hasAnyBlocks;
+            btnRevokeAll.Enabled = canModify && hasRecipientSelection && hasAnyBlocks;
 
             if (!hasKey)
             {
@@ -674,12 +689,8 @@ namespace HSTRYDoc
             {
                 lblMyRecipientStatus.Text = "Key loaded. This container is not V4. Upgrade to V4 to edit recipients or block rights.";
                 lblMyRecipientStatus.ForeColor = Color.DarkRed;
-
-                grpBlockAccess.Enabled = false;
                 return;
             }
-
-            grpBlockAccess.Enabled = true;
 
             if (_isOwnerKeyLoaded)
             {
@@ -710,7 +721,7 @@ namespace HSTRYDoc
         }
 
         // ============================================================
-        // Block access UI (V4)
+        // Block list UI
         // ============================================================
 
         private RecipientEntry? GetSelectedRecipient()
@@ -724,6 +735,17 @@ namespace HSTRYDoc
             catch { return null; }
 
             return _container.Recipients.FirstOrDefault(r => r.KeyId.SequenceEqual(keyId));
+        }
+
+        private List<int> GetSelectedBlockIndices()
+        {
+            return lvwBlocks.SelectedItems
+                .Cast<ListViewItem>()
+                .Select(it => int.TryParse(it.Text, NumberStyles.Integer, CultureInfo.InvariantCulture, out int idx) ? idx : -1)
+                .Where(idx => idx >= 0)
+                .Distinct()
+                .OrderByDescending(x => x)
+                .ToList();
         }
 
         private void RefreshBlocksList()
@@ -751,8 +773,6 @@ namespace HSTRYDoc
                 for (int i = 0; i < _container.Blocks.Count; i++)
                 {
                     var b = _container.Blocks[i];
-
-                    // Title might be "<restricted>" for the current user.
                     string title = string.IsNullOrWhiteSpace(b.Title) ? "(no title)" : b.Title;
 
                     var slot = b.KeySlots.FirstOrDefault(s => s.KeyId.SequenceEqual(rec.KeyId));
@@ -777,28 +797,32 @@ namespace HSTRYDoc
             if ((r & BlockRights.Read) == 0 && (r & BlockRights.Write) == 0) return "None";
             if ((r & BlockRights.Read) != 0 && (r & BlockRights.Write) == 0) return "Read";
             if ((r & BlockRights.Read) != 0 && (r & BlockRights.Write) != 0) return "Read+Write";
-            // Should never happen (write without read), but display something sane.
             if ((r & BlockRights.Write) != 0) return "Write";
             return "None";
         }
 
-        private void UiGrantSelectedBlocks(BlockRights rights)
+        // ============================================================
+        // Selected-only operations (sync)
+        // ============================================================
+
+        private void UiGrantReadSelectedBlock()
         {
             if (_container.Version != HSTRYContainer.CurrentVersion)
             {
-                MessageBox.Show(this, "Block access control requires V4.", "Block access", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                MessageBox.Show(this, "Block access control requires V4.", "Block access",
+                    MessageBoxButtons.OK, MessageBoxIcon.Warning);
                 return;
             }
 
             if (_myPrivateKey == null || !_isOwnerKeyLoaded)
             {
-                MessageBox.Show(this, "Load the owner private key to edit block rights.", "Block access", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                MessageBox.Show(this, "Load the owner private key to edit block rights.", "Block access",
+                    MessageBoxButtons.OK, MessageBoxIcon.Warning);
                 return;
             }
 
             var rec = GetSelectedRecipient();
-            if (rec == null)
-                return;
+            if (rec == null) return;
 
             if (rec.PublicKeySpki == null || rec.PublicKeySpki.Length == 0)
             {
@@ -807,27 +831,23 @@ namespace HSTRYDoc
                 return;
             }
 
-            if (lvwBlocks.SelectedItems.Count == 0)
+            if (lvwBlocks.SelectedItems.Count == 0) return;
+            if (!int.TryParse(lvwBlocks.SelectedItems[0].Text, NumberStyles.Integer, CultureInfo.InvariantCulture, out int idx))
                 return;
 
-            // Process indices descending to minimize re-encryption work.
-            var indices = lvwBlocks.SelectedItems
-                .Cast<ListViewItem>()
-                .Select(it => int.TryParse(it.Text, NumberStyles.Integer, CultureInfo.InvariantCulture, out int idx) ? idx : -1)
-                .Where(idx => idx >= 0)
-                .Distinct()
-                .OrderByDescending(x => x)
-                .ToList();
+            if (idx < 0 || idx >= _container.Blocks.Count)
+                return;
 
             try
             {
+                var slot = _container.Blocks[idx].KeySlots.FirstOrDefault(s => s.KeyId.SequenceEqual(rec.KeyId));
+                if (slot != null && (slot.Rights & BlockRights.Read) != 0)
+                    return;
+
                 using var rsaPub = RSA.Create();
                 rsaPub.ImportSubjectPublicKeyInfo(rec.PublicKeySpki, out _);
 
-                foreach (int idx in indices)
-                {
-                    _container.GrantBlockAccess(_myPrivateKey, idx, rsaPub, rights, replaceExisting: true);
-                }
+                _container.GrantBlockAccess(_myPrivateKey, idx, rsaPub, BlockRights.Read, replaceExisting: true);
 
                 ContainerChanged = true;
                 RefreshBlocksList();
@@ -842,37 +862,35 @@ namespace HSTRYDoc
         {
             if (_container.Version != HSTRYContainer.CurrentVersion)
             {
-                MessageBox.Show(this, "Block access control requires V4.", "Block access", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                MessageBox.Show(this, "Block access control requires V4.", "Block access",
+                    MessageBoxButtons.OK, MessageBoxIcon.Warning);
                 return;
             }
 
             if (_myPrivateKey == null || !_isOwnerKeyLoaded)
             {
-                MessageBox.Show(this, "Load the owner private key to edit block rights.", "Block access", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                MessageBox.Show(this, "Load the owner private key to edit block rights.", "Block access",
+                    MessageBoxButtons.OK, MessageBoxIcon.Warning);
                 return;
             }
 
             var rec = GetSelectedRecipient();
-            if (rec == null)
-                return;
+            if (rec == null) return;
 
-            if (lvwBlocks.SelectedItems.Count == 0)
-                return;
+            var indices = GetSelectedBlockIndices();
+            if (indices.Count == 0) return;
 
             string keyIdHex = Convert.ToHexString(rec.KeyId);
-
-            var indices = lvwBlocks.SelectedItems
-                .Cast<ListViewItem>()
-                .Select(it => int.TryParse(it.Text, NumberStyles.Integer, CultureInfo.InvariantCulture, out int idx) ? idx : -1)
-                .Where(idx => idx >= 0)
-                .Distinct()
-                .OrderByDescending(x => x)
-                .ToList();
 
             try
             {
                 foreach (int idx in indices)
+                {
+                    if (!_container.Blocks[idx].KeySlots.Any(s => s.KeyId.SequenceEqual(rec.KeyId)))
+                        continue;
+
                     _container.RevokeBlockAccess(_myPrivateKey, idx, keyIdHex);
+                }
 
                 ContainerChanged = true;
                 RefreshBlocksList();
@@ -880,6 +898,240 @@ namespace HSTRYDoc
             catch (Exception ex)
             {
                 MessageBox.Show(this, ex.Message, "Block access", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
+        }
+
+        // ============================================================
+        // Bulk operations (async + reporterDiag)
+        // ============================================================
+
+        private async Task UiGrantReadAllBlocksAsync()
+        {
+            if (_container.Version != HSTRYContainer.CurrentVersion)
+            {
+                MessageBox.Show(this, "Block access control requires V4.", "Block access",
+                    MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
+
+            if (_myPrivateKey == null || !_isOwnerKeyLoaded)
+            {
+                MessageBox.Show(this, "Load the owner private key to edit block rights.", "Block access",
+                    MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
+
+            if (_container.Blocks.Count == 0)
+                return;
+
+            var rec = GetSelectedRecipient();
+            if (rec == null) return;
+
+            if (rec.PublicKeySpki == null || rec.PublicKeySpki.Length == 0)
+            {
+                MessageBox.Show(this, "Recipient public key is missing in the container (SPKI).", "Block access",
+                    MessageBoxButtons.OK, MessageBoxIcon.Error);
+                return;
+            }
+
+            var confirm = MessageBox.Show(
+                this,
+                "Grant READ access on ALL blocks for the selected recipient?\n\nThis may take some time for large containers.",
+                "Grant read (all)",
+                MessageBoxButtons.YesNo,
+                MessageBoxIcon.Question,
+                MessageBoxDefaultButton.Button2);
+
+            if (confirm != DialogResult.Yes)
+                return;
+
+            SetUiBusy(true);
+            try
+            {
+                byte[] recSpki = rec.PublicKeySpki.ToArray(); // stable for async
+
+                await reporterDiag.RunAsync(
+                    owner: this,
+                    title: "Grant read (all)",
+                    work: async (progress, token) =>
+                    {
+                        using var rsaPub = RSA.Create();
+                        rsaPub.ImportSubjectPublicKeyInfo(recSpki, out _);
+
+                        await Task.Run(() =>
+                        {
+                            // requires HSTRYContainer.GrantReadAllBlocks(...)
+                            _container.GrantReadAllBlocks(_myPrivateKey, rsaPub, progress, token);
+                        }, token);
+                    });
+
+                ContainerChanged = true;
+                RefreshBlocksList();
+            }
+            catch (OperationCanceledException)
+            {
+                MessageBox.Show(this, "Operation cancelled.", "Grant read (all)",
+                    MessageBoxButtons.OK, MessageBoxIcon.Information);
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show(this, ex.Message, "Grant read (all)",
+                    MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
+            finally
+            {
+                SetUiBusy(false);
+                UpdateMyRecipientStatusAndPermissions();
+            }
+        }
+
+        private async Task UiGrantWriteAllBlocksAsync()
+        {
+            if (_container.Version != HSTRYContainer.CurrentVersion)
+            {
+                MessageBox.Show(this, "Block access control requires V4.", "Block access",
+                    MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
+
+            if (_myPrivateKey == null || !_isOwnerKeyLoaded)
+            {
+                MessageBox.Show(this, "Load the owner private key to edit block rights.", "Block access",
+                    MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
+
+            if (_container.Blocks.Count == 0)
+                return;
+
+            var rec = GetSelectedRecipient();
+            if (rec == null) return;
+
+            if (rec.PublicKeySpki == null || rec.PublicKeySpki.Length == 0)
+            {
+                MessageBox.Show(this, "Recipient public key is missing in the container (SPKI).", "Block access",
+                    MessageBoxButtons.OK, MessageBoxIcon.Error);
+                return;
+            }
+
+            var confirm = MessageBox.Show(
+                this,
+                "Grant READ+WRITE access on ALL blocks for the selected recipient?\n\nThis may take some time for large containers.\n\nContinue?",
+                "Grant write (all)",
+                MessageBoxButtons.YesNo,
+                MessageBoxIcon.Warning,
+                MessageBoxDefaultButton.Button2);
+
+            if (confirm != DialogResult.Yes)
+                return;
+
+            SetUiBusy(true);
+            try
+            {
+                byte[] recSpki = rec.PublicKeySpki.ToArray();
+
+                await reporterDiag.RunAsync(
+                    owner: this,
+                    title: "Grant write (all)",
+                    work: async (progress, token) =>
+                    {
+                        using var rsaPub = RSA.Create();
+                        rsaPub.ImportSubjectPublicKeyInfo(recSpki, out _);
+
+                        await Task.Run(() =>
+                        {
+                            // requires HSTRYContainer.GrantWriteAllBlocks(...)
+                            _container.GrantWriteAllBlocks(_myPrivateKey, rsaPub, progress, token);
+                        }, token);
+                    });
+
+                ContainerChanged = true;
+                RefreshBlocksList();
+            }
+            catch (OperationCanceledException)
+            {
+                MessageBox.Show(this, "Operation cancelled.", "Grant write (all)",
+                    MessageBoxButtons.OK, MessageBoxIcon.Information);
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show(this, ex.Message, "Grant write (all)",
+                    MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
+            finally
+            {
+                SetUiBusy(false);
+                UpdateMyRecipientStatusAndPermissions();
+            }
+        }
+
+        private async Task UiRevokeAllBlocksAsync()
+        {
+            if (_container.Version != HSTRYContainer.CurrentVersion)
+            {
+                MessageBox.Show(this, "Block access control requires V4.", "Block access",
+                    MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
+
+            if (_myPrivateKey == null || !_isOwnerKeyLoaded)
+            {
+                MessageBox.Show(this, "Load the owner private key to edit block rights.", "Block access",
+                    MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
+
+            if (_container.Blocks.Count == 0)
+                return;
+
+            var rec = GetSelectedRecipient();
+            if (rec == null) return;
+
+            var confirm = MessageBox.Show(
+                this,
+                "Revoke ALL block access for the selected recipient?\n\nThis may take some time for large containers.",
+                "Revoke all",
+                MessageBoxButtons.YesNo,
+                MessageBoxIcon.Warning,
+                MessageBoxDefaultButton.Button2);
+
+            if (confirm != DialogResult.Yes)
+                return;
+
+            SetUiBusy(true);
+            try
+            {
+                byte[] keyIdCopy = rec.KeyId.ToArray();
+
+                await reporterDiag.RunAsync(
+                    owner: this,
+                    title: "Revoke all",
+                    work: async (progress, token) =>
+                    {
+                        await Task.Run(() =>
+                        {
+                            // requires HSTRYContainer.RevokeAllBlocks(...)
+                            _container.RevokeAllBlocks(_myPrivateKey, keyIdCopy, progress, token);
+                        }, token);
+                    });
+
+                ContainerChanged = true;
+                RefreshBlocksList();
+            }
+            catch (OperationCanceledException)
+            {
+                MessageBox.Show(this, "Operation cancelled.", "Revoke all",
+                    MessageBoxButtons.OK, MessageBoxIcon.Information);
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show(this, ex.Message, "Revoke all",
+                    MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
+            finally
+            {
+                SetUiBusy(false);
+                UpdateMyRecipientStatusAndPermissions();
             }
         }
 

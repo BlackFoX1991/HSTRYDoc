@@ -1,4 +1,4 @@
-﻿// KeyManagerDialog.Designer.cs (updated for V4 Option A: per-block access control)
+﻿// KeyManagerDialog.Designer.cs (V4 Option A: per-block access control + bulk ops)
 using System;
 using System.Drawing;
 using System.Windows.Forms;
@@ -42,9 +42,12 @@ namespace HSTRYDoc
         private ColumnHeader colBlockIndex;
         private ColumnHeader colBlockTitle;
         private ColumnHeader colBlockRights;
-        private Button btnGrantRead;
-        private Button btnGrantWrite;
-        private Button btnRevokeAccess;
+
+        private Button btnGrantRead;      // selected block only
+        private Button btnGrantWrite;     // ALL blocks (Read+Write)
+        private Button btnRevokeAccess;   // selected blocks
+        private Button btnGrantReadAll;   // ALL blocks (Read)
+        private Button btnRevokeAll;      // ALL blocks (remove slot)
 
         private Button btnOk;
         private Button btnCancel;
@@ -90,9 +93,12 @@ namespace HSTRYDoc
             colBlockIndex = new ColumnHeader();
             colBlockTitle = new ColumnHeader();
             colBlockRights = new ColumnHeader();
+
             btnGrantRead = new Button();
             btnGrantWrite = new Button();
             btnRevokeAccess = new Button();
+            btnGrantReadAll = new Button();
+            btnRevokeAll = new Button();
 
             btnOk = new Button();
             btnCancel = new Button();
@@ -325,6 +331,8 @@ namespace HSTRYDoc
             grpBlockAccess.Controls.Add(btnGrantRead);
             grpBlockAccess.Controls.Add(btnGrantWrite);
             grpBlockAccess.Controls.Add(btnRevokeAccess);
+            grpBlockAccess.Controls.Add(btnGrantReadAll);
+            grpBlockAccess.Controls.Add(btnRevokeAll);
             grpBlockAccess.Location = new Point(14, 524);
             grpBlockAccess.Margin = new Padding(3, 4, 3, 4);
             grpBlockAccess.Name = "grpBlockAccess";
@@ -352,7 +360,7 @@ namespace HSTRYDoc
             lvwBlocks.Margin = new Padding(3, 4, 3, 4);
             lvwBlocks.MultiSelect = true;
             lvwBlocks.Name = "lvwBlocks";
-            lvwBlocks.Size = new Size(629, 110);
+            lvwBlocks.Size = new Size(629, 80);
             lvwBlocks.TabIndex = 1;
             lvwBlocks.UseCompatibleStateImageBehavior = false;
             lvwBlocks.View = View.Details;
@@ -379,7 +387,7 @@ namespace HSTRYDoc
             btnGrantRead.Name = "btnGrantRead";
             btnGrantRead.Size = new Size(190, 33);
             btnGrantRead.TabIndex = 2;
-            btnGrantRead.Text = "Grant read";
+            btnGrantRead.Text = "Grant read (selected)";
             btnGrantRead.UseVisualStyleBackColor = true;
             // 
             // btnGrantWrite
@@ -389,7 +397,7 @@ namespace HSTRYDoc
             btnGrantWrite.Name = "btnGrantWrite";
             btnGrantWrite.Size = new Size(190, 33);
             btnGrantWrite.TabIndex = 3;
-            btnGrantWrite.Text = "Grant write";
+            btnGrantWrite.Text = "Grant write (all)";
             btnGrantWrite.UseVisualStyleBackColor = true;
             // 
             // btnRevokeAccess
@@ -399,8 +407,28 @@ namespace HSTRYDoc
             btnRevokeAccess.Name = "btnRevokeAccess";
             btnRevokeAccess.Size = new Size(190, 33);
             btnRevokeAccess.TabIndex = 4;
-            btnRevokeAccess.Text = "Revoke access";
+            btnRevokeAccess.Text = "Revoke (selected)";
             btnRevokeAccess.UseVisualStyleBackColor = true;
+            // 
+            // btnGrantReadAll
+            // 
+            btnGrantReadAll.Location = new Point(18, 134);
+            btnGrantReadAll.Margin = new Padding(3, 4, 3, 4);
+            btnGrantReadAll.Name = "btnGrantReadAll";
+            btnGrantReadAll.Size = new Size(309, 33);
+            btnGrantReadAll.TabIndex = 5;
+            btnGrantReadAll.Text = "Grant read (all)";
+            btnGrantReadAll.UseVisualStyleBackColor = true;
+            // 
+            // btnRevokeAll
+            // 
+            btnRevokeAll.Location = new Point(338, 134);
+            btnRevokeAll.Margin = new Padding(3, 4, 3, 4);
+            btnRevokeAll.Name = "btnRevokeAll";
+            btnRevokeAll.Size = new Size(309, 33);
+            btnRevokeAll.TabIndex = 6;
+            btnRevokeAll.Text = "Revoke all";
+            btnRevokeAll.UseVisualStyleBackColor = true;
             // 
             // btnOk
             // 

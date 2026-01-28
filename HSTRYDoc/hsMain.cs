@@ -205,6 +205,24 @@ namespace HSTRYDoc
 
         #region test_blocks
 
+        private bool IsOwnerKeyLoadedForCurrentContainer()
+        {
+            if (_container == null) return false;
+            if (string.IsNullOrWhiteSpace(_privateKeyPath) || !File.Exists(_privateKeyPath)) return false;
+
+            try
+            {
+                using RSA priv = HSTRYContainer.RsaKeyFiles.LoadPrivateKeyPkcs8(_privateKeyPath);
+                byte[] spki = priv.ExportSubjectPublicKeyInfo();
+                return spki.SequenceEqual(_container.OwnerPublicKeySpki);
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+
         // ...
 
         private async Task CreateTestBlocksAsync(int count, int minWordsPerBlock = 80, int maxWordsPerBlock = 250)
@@ -218,16 +236,28 @@ namespace HSTRYDoc
                 return;
             }
 
+            // Variant 1: Only owner can create blocks
+            if (_container.Version == HSTRYContainer.CurrentVersion && !IsOwnerKeyLoadedForCurrentContainer())
+            {
+                MessageBox.Show(this,
+                    "Access denied.\n\nWith V4 Variant 1, only the owner can create new blocks.\nLoad the owner private key first.",
+                    "Test blocks",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Warning);
+                return;
+            }
+
             if (!MaybeCommitCurrentBlock())
                 return;
 
-            // Keep range sane
             if (minWordsPerBlock < 1) minWordsPerBlock = 1;
             if (maxWordsPerBlock < minWordsPerBlock) maxWordsPerBlock = minWordsPerBlock;
 
             try
             {
-                // Optional: progress dialog (works with the reporterDiag you already have)
+                // Stop hashing before bulk mutation
+                CancelHashWorkers();
+
                 await reporterDiag.RunAsync(
                     owner: this,
                     title: "Creating test blocks",
@@ -243,21 +273,17 @@ namespace HSTRYDoc
 
                         await Task.Run(() =>
                         {
-                            // Pre-generate dictionary words once (fast + stable)
                             string[] words = BuildWordPool();
 
                             for (int i = 0; i < count; i++)
                             {
                                 token.ThrowIfCancellationRequested();
 
-                                // Unique title (no duplicates)
                                 string title = _container!.GenerateUniqueTitle();
 
-                                // Build random text
                                 int wCount = RandomNumberGenerator.GetInt32(minWordsPerBlock, maxWordsPerBlock + 1);
                                 string plain = BuildRandomParagraphs(words, wCount);
 
-                                // Wrap as RTF (minimal formatting; safe escaping)
                                 string rtf = BuildSimpleRtf(title, plain);
 
                                 _container!.AddRtfDocument(title, rtf);
