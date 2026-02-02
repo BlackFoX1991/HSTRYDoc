@@ -1,10 +1,11 @@
-﻿// KeyManagerDialog.cs (V4 Option A: per-block access control + ASYNC bulk ops)
-// Behavior:
-// - Grant write (all): applies Read+Write to ALL blocks (async + reporterDiag)
-// - Grant read (selected): applies Read to the currently selected block (only if not already granted)
-// - Grant read (all): applies Read to ALL blocks (only if not already granted) (async + reporterDiag)
-// - Revoke (selected): revokes access on selected blocks
-// - Revoke all: revokes access on ALL blocks (async + reporterDiag)
+﻿// KeyManagerDialog.cs (V6 ECC: recipients + per-block access control)
+// - Uses ECDH private key for opening/unwrapping + owner block operations
+// - Uses ECDSA signing private key for header changes (add/remove recipients)
+// - Key files:
+//   - ECDH private: *.hstrypriv
+//   - ECDH public:  *.hstrypub
+//   - ECDSA signing private: *.hstrysigpriv (derived from *.hstrypriv)
+//   - ECDSA signing public:  *.hstrysigpub
 
 using System;
 using System.Collections.Generic;
@@ -24,60 +25,57 @@ namespace HSTRYDoc
         private readonly HSTRYContainer _container;
         private readonly string _containerPath;
 
-        private RSA? _myPrivateKey;
-        private string? _myKeyIdHex;
-        private bool _isOwnerKeyLoaded;
+        private ECDiffieHellman? _myEcdhPrivateKey;
+        private ECDsa? _mySigningPrivateKey;
 
-        public string? SelectedPrivateKeyPath { get; private set; }
+        private string? _myKeyIdHex;     // KeyId = SHA256(ECDH SPKI)
+        private bool _isOwnerKeyLoaded;  // owner means: ECDH matches container owner ECDH
+
+        public string? SelectedEcdhPrivateKeyPath { get; private set; }
         public bool ContainerChanged { get; private set; }
 
-        public KeyManagerDialog(HSTRYContainer container, string containerPath, string? currentPrivateKeyPath)
+        public KeyManagerDialog(HSTRYContainer container, string containerPath, string? currentEcdhPrivateKeyPath)
         {
             InitializeComponent();
 
             _container = container ?? throw new ArgumentNullException(nameof(container));
             _containerPath = containerPath ?? string.Empty;
 
-            SelectedPrivateKeyPath = currentPrivateKeyPath;
+            SelectedEcdhPrivateKeyPath = currentEcdhPrivateKeyPath;
 
             btnBrowsePriv.Click += (_, __) => UiBrowsePrivateKey();
             btnCreateKeyPair.Click += (_, __) => UiCreateKeyPairForSharing();
             btnExportPublic.Click += (_, __) => UiExportPublicKey();
-            btnTransferOwnership.Click += (_, __) => UiTransferOwnership();
+            btnTransferOwnership.Click += async (_, __) => await UiTransferOwnershipAsync();
 
             btnAddMyself.Click += (_, __) => UiAddMyselfAsRecipient();
             btnAddRecipient.Click += (_, __) => UiAddRecipient();
             btnRemoveRecipient.Click += (_, __) => UiRemoveSelectedRecipient();
             btnCopyKeyId.Click += (_, __) => UiCopySelectedKeyId();
 
-            // Block access
-            btnGrantRead.Click += (_, __) => UiGrantReadSelectedBlock();                 // selected only (sync)
-            btnRevokeAccess.Click += (_, __) => UiRevokeSelectedBlocks();                // selected only (sync)
+            btnGrantRead.Click += (_, __) => UiGrantReadSelectedBlock();
+            btnRevokeAccess.Click += (_, __) => UiRevokeSelectedBlocks();
 
-            // Bulk (async + reporterDiag)
             btnGrantReadAll.Click += async (_, __) => await UiGrantReadAllBlocksAsync();
-            btnGrantWrite.Click += async (_, __) => await UiGrantWriteAllBlocksAsync(); // Read+Write for ALL
+            btnGrantWrite.Click += async (_, __) => await UiGrantWriteAllBlocksAsync();
             btnRevokeAll.Click += async (_, __) => await UiRevokeAllBlocksAsync();
 
             btnOk.Click += (_, __) => { DialogResult = DialogResult.OK; Close(); };
             btnCancel.Click += (_, __) => { DialogResult = DialogResult.Cancel; Close(); };
 
-            // Drag & drop public keys onto recipients list
             lvwRecipients.AllowDrop = true;
             lvwRecipients.DragEnter += LvwRecipients_DragEnter;
             lvwRecipients.DragDrop += LvwRecipients_DragDrop;
 
-            // Refresh blocks view when changing selected recipient
             lvwRecipients.SelectedIndexChanged += (_, __) => RefreshBlocksList();
 
-            // Update enabled state when selecting blocks
             lvwBlocks.SelectedIndexChanged += (_, __) => UpdateMyRecipientStatusAndPermissions();
             lvwBlocks.ItemSelectionChanged += (_, __) => UpdateMyRecipientStatusAndPermissions();
 
             RefreshRecipientsList();
 
-            if (!string.IsNullOrWhiteSpace(SelectedPrivateKeyPath) && File.Exists(SelectedPrivateKeyPath))
-                TryLoadMyPrivateKey(SelectedPrivateKeyPath!, showErrors: false);
+            if (!string.IsNullOrWhiteSpace(SelectedEcdhPrivateKeyPath) && File.Exists(SelectedEcdhPrivateKeyPath))
+                TryLoadMyEcdhPrivateKey(SelectedEcdhPrivateKeyPath!, showErrors: false);
             else
                 UpdateMyKeyUi(null, null);
 
@@ -85,9 +83,11 @@ namespace HSTRYDoc
             RefreshBlocksList();
         }
 
+        private static string DeriveSigningPrivateKeyPath(string ecdhPrivPath)
+            => Path.ChangeExtension(ecdhPrivPath, ".hstrysigpriv");
+
         private void SetUiBusy(bool busy)
         {
-            // Keep cancel/ok behavior simple: while busy, prevent operations
             grpMyKeys.Enabled = !busy;
             grpRecipients.Enabled = !busy;
             grpBlockAccess.Enabled = !busy;
@@ -110,13 +110,13 @@ namespace HSTRYDoc
 
         private void LvwRecipients_DragDrop(object? sender, DragEventArgs e)
         {
-            if (!_isOwnerKeyLoaded || _myPrivateKey == null)
+            if (!_isOwnerKeyLoaded || _mySigningPrivateKey == null)
                 return;
 
             if (_container.Version != HSTRYContainer.CurrentVersion)
             {
                 MessageBox.Show(this,
-                    "This container is not V4. Upgrade it to V4 before editing recipients or block rights.",
+                    "This container is not V6.",
                     "Recipients",
                     MessageBoxButtons.OK,
                     MessageBoxIcon.Warning);
@@ -136,8 +136,8 @@ namespace HSTRYDoc
 
                 try
                 {
-                    using var pub = HSTRYContainer.RsaKeyFiles.LoadPublicKeySpki(f);
-                    _container.AddRecipient(_myPrivateKey, pub);
+                    using var pub = HSTRYContainer.EcdhKeyFiles.LoadPublicKeySpki(f);
+                    _container.AddRecipient(_mySigningPrivateKey, pub);
                     added++;
                     ContainerChanged = true;
                 }
@@ -154,7 +154,7 @@ namespace HSTRYDoc
                 UpdateMyRecipientStatusAndPermissions();
 
                 MessageBox.Show(this,
-                    "Recipients added.\n\nNote: New recipients have NO block access by default in V4.\nSelect the recipient and use the Block access tools below.",
+                    "Recipients added.\n\nNote: New recipients have NO block access by default.",
                     "Recipients",
                     MessageBoxButtons.OK,
                     MessageBoxIcon.Information);
@@ -165,39 +165,45 @@ namespace HSTRYDoc
         {
             using var ofd = new OpenFileDialog
             {
-                Filter = "HSTRY Private Key (*.hstrypriv)|*.hstrypriv|All files (*.*)|*.*",
+                Filter = "HSTRY ECDH Private Key (*.hstrypriv)|*.hstrypriv|All files (*.*)|*.*",
                 CheckFileExists = true,
-                Title = "Select private key"
+                Title = "Select ECDH private key"
             };
 
             if (ofd.ShowDialog(this) != DialogResult.OK)
                 return;
 
-            TryLoadMyPrivateKey(ofd.FileName, showErrors: true);
+            TryLoadMyEcdhPrivateKey(ofd.FileName, showErrors: true);
             RefreshBlocksList();
             UpdateMyRecipientStatusAndPermissions();
         }
 
-        private void TryLoadMyPrivateKey(string path, bool showErrors)
+        private void TryLoadMyEcdhPrivateKey(string path, bool showErrors)
         {
             try
             {
-                _myPrivateKey?.Dispose();
-                _myPrivateKey = HSTRYContainer.RsaKeyFiles.LoadPrivateKeyPkcs8(path);
+                _myEcdhPrivateKey?.Dispose();
+                _myEcdhPrivateKey = HSTRYContainer.EcdhKeyFiles.LoadPrivateKeyPkcs8(path);
 
-                byte[] keyId = HSTRYContainer.RsaKeyFiles.ComputeKeyIdFromPublicKey(_myPrivateKey);
+                byte[] keyId = HSTRYContainer.EcdhKeyFiles.ComputeKeyIdFromPublicKey(_myEcdhPrivateKey);
                 _myKeyIdHex = Convert.ToHexString(keyId);
 
-                SelectedPrivateKeyPath = path;
+                SelectedEcdhPrivateKeyPath = path;
 
-                _isOwnerKeyLoaded = IsOwnerPrivateKey(_myPrivateKey);
+                _isOwnerKeyLoaded = IsOwnerEcdhPrivateKey(_myEcdhPrivateKey);
+
+                // Try load signing key automatically if present (owner features require it)
+                TryLoadSigningKeyForEcdhPath(path, showErrors: showErrors && _isOwnerKeyLoaded);
 
                 UpdateMyKeyUi(path, _myKeyIdHex);
             }
             catch (Exception ex)
             {
-                _myPrivateKey?.Dispose();
-                _myPrivateKey = null;
+                _myEcdhPrivateKey?.Dispose();
+                _myEcdhPrivateKey = null;
+                _mySigningPrivateKey?.Dispose();
+                _mySigningPrivateKey = null;
+
                 _myKeyIdHex = null;
                 _isOwnerKeyLoaded = false;
 
@@ -208,12 +214,45 @@ namespace HSTRYDoc
             }
         }
 
-        private bool IsOwnerPrivateKey(RSA priv)
+        private void TryLoadSigningKeyForEcdhPath(string ecdhPrivPath, bool showErrors)
+        {
+            try
+            {
+                _mySigningPrivateKey?.Dispose();
+                _mySigningPrivateKey = null;
+
+                string signPath = DeriveSigningPrivateKeyPath(ecdhPrivPath);
+                if (!File.Exists(signPath))
+                {
+                    if (showErrors)
+                    {
+                        MessageBox.Show(this,
+                            "Owner signing key is missing.\n\nExpected file:\n" + signPath,
+                            "Owner signing key",
+                            MessageBoxButtons.OK,
+                            MessageBoxIcon.Warning);
+                    }
+                    return;
+                }
+
+                _mySigningPrivateKey = HSTRYContainer.EcdsaKeyFiles.LoadPrivateKeyPkcs8(signPath);
+            }
+            catch (Exception ex)
+            {
+                _mySigningPrivateKey?.Dispose();
+                _mySigningPrivateKey = null;
+
+                if (showErrors)
+                    MessageBox.Show(this, ex.Message, "Load signing key", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
+        }
+
+        private bool IsOwnerEcdhPrivateKey(ECDiffieHellman priv)
         {
             try
             {
                 byte[] spki = priv.ExportSubjectPublicKeyInfo();
-                return spki.SequenceEqual(_container.OwnerPublicKeySpki);
+                return spki.SequenceEqual(_container.OwnerEcdhPublicKeySpki);
             }
             catch
             {
@@ -226,37 +265,41 @@ namespace HSTRYDoc
             txtPrivateKeyPath.Text = path ?? string.Empty;
             txtMyKeyId.Text = keyIdHex ?? string.Empty;
 
-            btnExportPublic.Enabled = _myPrivateKey != null;
-            btnTransferOwnership.Enabled = _myPrivateKey != null; // refined in UpdateMyRecipientStatusAndPermissions
+            btnExportPublic.Enabled = _myEcdhPrivateKey != null;
+            btnTransferOwnership.Enabled = _myEcdhPrivateKey != null; // refined later
         }
 
         // ============================================================
-        // Create new keypair
+        // Create new key set (recipient)
         // ============================================================
         private void UiCreateKeyPairForSharing()
         {
             using var sfd = new SaveFileDialog
             {
-                Filter = "HSTRY Private Key (*.hstrypriv)|*.hstrypriv|All files (*.*)|*.*",
+                Filter = "HSTRY ECDH Private Key (*.hstrypriv)|*.hstrypriv|All files (*.*)|*.*",
                 DefaultExt = "hstrypriv",
                 AddExtension = true,
                 FileName = "recipient.hstrypriv",
-                Title = "Save new private key"
+                Title = "Save new ECDH private key"
             };
 
             if (sfd.ShowDialog(this) != DialogResult.OK)
                 return;
 
-            string privPath = sfd.FileName;
-            string pubPath = Path.ChangeExtension(privPath, ".hstrypub");
+            string ecdhPrivPath = sfd.FileName;
+            string ecdhPubPath = Path.ChangeExtension(ecdhPrivPath, ".hstrypub");
 
-            bool overwrite = File.Exists(privPath) || File.Exists(pubPath);
+            // Optional signing set (only needed if you want this recipient to become owner later)
+            string signPrivPath = DeriveSigningPrivateKeyPath(ecdhPrivPath);
+            string signPubPath = Path.ChangeExtension(signPrivPath, ".hstrysigpub");
+
+            bool overwrite = File.Exists(ecdhPrivPath) || File.Exists(ecdhPubPath) || File.Exists(signPrivPath) || File.Exists(signPubPath);
             if (overwrite)
             {
                 var res = MessageBox.Show(
                     this,
                     "Key files already exist. Overwrite them?",
-                    "Create key pair",
+                    "Create key set",
                     MessageBoxButtons.YesNo,
                     MessageBoxIcon.Warning,
                     MessageBoxDefaultButton.Button2);
@@ -267,70 +310,74 @@ namespace HSTRYDoc
 
             try
             {
-                using var rsa = HSTRYContainer.RsaKeyFiles.CreateNewKeyPair(3072);
-                HSTRYContainer.RsaKeyFiles.SavePrivateKeyPkcs8(privPath, rsa);
-                HSTRYContainer.RsaKeyFiles.SavePublicKeySpki(pubPath, rsa);
+                using var ecdh = HSTRYContainer.EcdhKeyFiles.CreateNewKeyPair();
+                using var ecdsa = HSTRYContainer.EcdsaKeyFiles.CreateNewKeyPair();
+
+                HSTRYContainer.EcdhKeyFiles.SavePrivateKeyPkcs8(ecdhPrivPath, ecdh);
+                HSTRYContainer.EcdhKeyFiles.SavePublicKeySpki(ecdhPubPath, ecdh);
+
+                HSTRYContainer.EcdsaKeyFiles.SavePrivateKeyPkcs8(signPrivPath, ecdsa);
+                HSTRYContainer.EcdsaKeyFiles.SavePublicKeySpki(signPubPath, ecdsa);
 
                 var res = MessageBox.Show(
                     this,
-                    "Key pair created.\n\nDo you want to add the new public key as a recipient now?",
-                    "Create key pair",
+                    "Key set created.\n\nDo you want to add the new ECDH public key as a recipient now?",
+                    "Create key set",
                     MessageBoxButtons.YesNo,
                     MessageBoxIcon.Question,
                     MessageBoxDefaultButton.Button1);
 
                 if (res == DialogResult.Yes)
                 {
-                    if (_myPrivateKey == null || !_isOwnerKeyLoaded)
+                    if (_myEcdhPrivateKey == null || !_isOwnerKeyLoaded || _mySigningPrivateKey == null)
                     {
-                        MessageBox.Show(this, "Load the owner private key to modify recipients.", "Create key pair",
-                            MessageBoxButtons.OK, MessageBoxIcon.Warning);
-                    }
-                    else if (_container.Version != HSTRYContainer.CurrentVersion)
-                    {
-                        MessageBox.Show(this, "This container is not V4. Upgrade it to V4 before editing recipients.", "Create key pair",
-                            MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                        MessageBox.Show(this,
+                            "Load the owner ECDH private key and ensure the owner signing key exists (*.hstrysigpriv) to modify recipients.",
+                            "Create key set",
+                            MessageBoxButtons.OK,
+                            MessageBoxIcon.Warning);
                     }
                     else
                     {
-                        using var pub = HSTRYContainer.RsaKeyFiles.LoadPublicKeySpki(pubPath);
-                        _container.AddRecipient(_myPrivateKey, pub);
+                        using var pub = HSTRYContainer.EcdhKeyFiles.LoadPublicKeySpki(ecdhPubPath);
+                        _container.AddRecipient(_mySigningPrivateKey, pub);
                         ContainerChanged = true;
+
                         RefreshRecipientsList();
                         RefreshBlocksList();
                         UpdateMyRecipientStatusAndPermissions();
 
                         MessageBox.Show(this,
-                            "Recipient added.\n\nNote: New recipients have NO block access by default in V4.",
-                            "Create key pair",
+                            "Recipient added.\n\nNote: New recipients have NO block access by default.",
+                            "Create key set",
                             MessageBoxButtons.OK,
                             MessageBoxIcon.Information);
                     }
                 }
 
                 MessageBox.Show(this,
-                    "Key pair created successfully.\n\nYou can share the .hstrypub file with other users.",
-                    "Create key pair",
+                    "Key set created successfully.\n\nYou can share the .hstrypub file with other users.",
+                    "Create key set",
                     MessageBoxButtons.OK,
                     MessageBoxIcon.Information);
             }
             catch (Exception ex)
             {
-                MessageBox.Show(this, ex.Message, "Create key pair", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                MessageBox.Show(this, ex.Message, "Create key set", MessageBoxButtons.OK, MessageBoxIcon.Error);
             }
         }
 
         private void UiExportPublicKey()
         {
-            if (_myPrivateKey == null)
+            if (_myEcdhPrivateKey == null)
             {
                 MessageBox.Show(this, "No private key is loaded.", "Export public key",
                     MessageBoxButtons.OK, MessageBoxIcon.Information);
                 return;
             }
 
-            string defaultPub = !string.IsNullOrWhiteSpace(SelectedPrivateKeyPath)
-                ? Path.ChangeExtension(SelectedPrivateKeyPath, ".hstrypub")
+            string defaultPub = !string.IsNullOrWhiteSpace(SelectedEcdhPrivateKeyPath)
+                ? Path.ChangeExtension(SelectedEcdhPrivateKeyPath, ".hstrypub")
                 : Path.ChangeExtension(_containerPath, ".hstrypub");
 
             using var sfd = new SaveFileDialog
@@ -347,7 +394,7 @@ namespace HSTRYDoc
 
             try
             {
-                HSTRYContainer.RsaKeyFiles.SavePublicKeySpki(sfd.FileName, _myPrivateKey);
+                HSTRYContainer.EcdhKeyFiles.SavePublicKeySpki(sfd.FileName, _myEcdhPrivateKey);
                 MessageBox.Show(this, "Public key exported successfully.", "Export public key",
                     MessageBoxButtons.OK, MessageBoxIcon.Information);
             }
@@ -357,26 +404,22 @@ namespace HSTRYDoc
             }
         }
 
-        private void UiTransferOwnership()
+        // ============================================================
+        // Transfer ownership (async, needs owner ECDH + owner ECDSA)
+        // ============================================================
+        private async Task UiTransferOwnershipAsync()
         {
-            if (_myPrivateKey == null)
+            if (_myEcdhPrivateKey == null)
             {
                 MessageBox.Show(this, "No private key is loaded.", "Transfer ownership",
                     MessageBoxButtons.OK, MessageBoxIcon.Information);
                 return;
             }
 
-            if (!_isOwnerKeyLoaded)
-            {
-                MessageBox.Show(this, "You must load the current owner private key to transfer ownership.", "Transfer ownership",
-                    MessageBoxButtons.OK, MessageBoxIcon.Warning);
-                return;
-            }
-
-            if (_container.Version != HSTRYContainer.CurrentVersion)
+            if (!_isOwnerKeyLoaded || _mySigningPrivateKey == null)
             {
                 MessageBox.Show(this,
-                    "This container is not V4. Upgrade it to V4 before transferring ownership.",
+                    "Load the current owner ECDH private key and ensure the owner signing key exists (*.hstrysigpriv).",
                     "Transfer ownership",
                     MessageBoxButtons.OK,
                     MessageBoxIcon.Warning);
@@ -385,7 +428,7 @@ namespace HSTRYDoc
 
             var confirm = MessageBox.Show(
                 this,
-                "This will transfer container ownership to a NEW key pair.\n\nContinue?",
+                "This will transfer container ownership to a NEW key set (ECDH + ECDSA).\n\nContinue?",
                 "Transfer ownership",
                 MessageBoxButtons.YesNo,
                 MessageBoxIcon.Warning,
@@ -396,20 +439,22 @@ namespace HSTRYDoc
 
             using var sfd = new SaveFileDialog
             {
-                Filter = "HSTRY Private Key (*.hstrypriv)|*.hstrypriv|All files (*.*)|*.*",
+                Filter = "HSTRY ECDH Private Key (*.hstrypriv)|*.hstrypriv|All files (*.*)|*.*",
                 DefaultExt = "hstrypriv",
                 AddExtension = true,
                 FileName = "new_owner.hstrypriv",
-                Title = "Save new owner private key"
+                Title = "Save new owner ECDH private key"
             };
 
             if (sfd.ShowDialog(this) != DialogResult.OK)
                 return;
 
-            string newPrivPath = sfd.FileName;
-            string newPubPath = Path.ChangeExtension(newPrivPath, ".hstrypub");
+            string newEcdhPrivPath = sfd.FileName;
+            string newEcdhPubPath = Path.ChangeExtension(newEcdhPrivPath, ".hstrypub");
+            string newSignPrivPath = DeriveSigningPrivateKeyPath(newEcdhPrivPath);
+            string newSignPubPath = Path.ChangeExtension(newSignPrivPath, ".hstrysigpub");
 
-            bool overwrite = File.Exists(newPrivPath) || File.Exists(newPubPath);
+            bool overwrite = File.Exists(newEcdhPrivPath) || File.Exists(newEcdhPubPath) || File.Exists(newSignPrivPath) || File.Exists(newSignPubPath);
             if (overwrite)
             {
                 var res = MessageBox.Show(
@@ -424,57 +469,87 @@ namespace HSTRYDoc
                     return;
             }
 
+            SetUiBusy(true);
             try
             {
-                using var newOwner = HSTRYContainer.RsaKeyFiles.CreateNewKeyPair(3072);
+                await reporterDiag.RunAsync(
+                    owner: this,
+                    title: "Transfer ownership",
+                    work: async (progress, token) =>
+                    {
+                        progress.Report(new UiProgress { Message = "Transferring ownership…", Indeterminate = true });
 
-                HSTRYContainer.RsaKeyFiles.SavePrivateKeyPkcs8(newPrivPath, newOwner);
-                HSTRYContainer.RsaKeyFiles.SavePublicKeySpki(newPubPath, newOwner);
+                        await Task.Run(() =>
+                        {
+                            using var newEcdh = HSTRYContainer.EcdhKeyFiles.CreateNewKeyPair();
+                            using var newSig = HSTRYContainer.EcdsaKeyFiles.CreateNewKeyPair();
 
-                _container.TransferOwnership(_myPrivateKey, newOwner, ensureNewOwnerIsRecipient: true);
-                ContainerChanged = true;
+                            HSTRYContainer.EcdhKeyFiles.SavePrivateKeyPkcs8(newEcdhPrivPath, newEcdh);
+                            HSTRYContainer.EcdhKeyFiles.SavePublicKeySpki(newEcdhPubPath, newEcdh);
 
-                TryLoadMyPrivateKey(newPrivPath, showErrors: true);
+                            HSTRYContainer.EcdsaKeyFiles.SavePrivateKeyPkcs8(newSignPrivPath, newSig);
+                            HSTRYContainer.EcdsaKeyFiles.SavePublicKeySpki(newSignPubPath, newSig);
+
+                            using var newEcdhReload = HSTRYContainer.EcdhKeyFiles.LoadPrivateKeyPkcs8(newEcdhPrivPath);
+                            using var newSigReload = HSTRYContainer.EcdsaKeyFiles.LoadPrivateKeyPkcs8(newSignPrivPath);
+
+                            _container.TransferOwnership(
+                                currentOwnerSigningPrivateKey: _mySigningPrivateKey,
+                                currentOwnerEcdhPrivateKey: _myEcdhPrivateKey!,
+                                newOwnerSigningPrivateKey: newSigReload,
+                                newOwnerEcdhPrivateKey: newEcdhReload,
+                                progress: progress,
+                                token: token);
+
+                            ContainerChanged = true;
+                        }, token);
+                    });
+
+                // Reload dialog state to new owner key (optional UX)
+                TryLoadMyEcdhPrivateKey(newEcdhPrivPath, showErrors: true);
+
                 RefreshRecipientsList();
                 RefreshBlocksList();
                 UpdateMyRecipientStatusAndPermissions();
 
                 MessageBox.Show(this,
-                    "Ownership transferred successfully.\n\nThe new owner key pair has been saved to disk.",
+                    "Ownership transferred successfully.\n\nThe new owner key set has been saved to disk.",
                     "Transfer ownership",
                     MessageBoxButtons.OK,
                     MessageBoxIcon.Information);
+            }
+            catch (OperationCanceledException)
+            {
+                MessageBox.Show(this, "Operation cancelled.", "Transfer ownership",
+                    MessageBoxButtons.OK, MessageBoxIcon.Information);
             }
             catch (Exception ex)
             {
                 MessageBox.Show(this, ex.Message, "Transfer ownership", MessageBoxButtons.OK, MessageBoxIcon.Error);
             }
+            finally
+            {
+                SetUiBusy(false);
+                UpdateMyRecipientStatusAndPermissions();
+            }
         }
 
         // ============================================================
-        // Recipient operations (owner-only)
+        // Recipient operations (owner-only; requires signing key)
         // ============================================================
-
         private void UiAddMyselfAsRecipient()
         {
-            if (_myPrivateKey == null || string.IsNullOrWhiteSpace(_myKeyIdHex))
+            if (_myEcdhPrivateKey == null || string.IsNullOrWhiteSpace(_myKeyIdHex))
             {
                 MessageBox.Show(this, "No private key is loaded.", "Add myself",
                     MessageBoxButtons.OK, MessageBoxIcon.Information);
                 return;
             }
 
-            if (!_isOwnerKeyLoaded)
-            {
-                MessageBox.Show(this, "You must load the owner private key to modify recipients.", "Add myself",
-                    MessageBoxButtons.OK, MessageBoxIcon.Warning);
-                return;
-            }
-
-            if (_container.Version != HSTRYContainer.CurrentVersion)
+            if (!_isOwnerKeyLoaded || _mySigningPrivateKey == null)
             {
                 MessageBox.Show(this,
-                    "This container is not V4. Upgrade it to V4 before editing recipients or block rights.",
+                    "Load the owner ECDH private key and ensure the owner signing key exists (*.hstrysigpriv) to modify recipients.",
                     "Add myself",
                     MessageBoxButtons.OK,
                     MessageBoxIcon.Warning);
@@ -492,8 +567,8 @@ namespace HSTRYDoc
 
             try
             {
-                using var pub = CreatePublicOnlyFromPrivate(_myPrivateKey);
-                _container.AddRecipient(_myPrivateKey, pub);
+                using var pub = CreatePublicOnlyFromPrivate(_myEcdhPrivateKey);
+                _container.AddRecipient(_mySigningPrivateKey, pub);
 
                 ContainerChanged = true;
                 RefreshRecipientsList();
@@ -506,27 +581,20 @@ namespace HSTRYDoc
             }
         }
 
-        private static RSA CreatePublicOnlyFromPrivate(RSA priv)
+        private static ECDiffieHellman CreatePublicOnlyFromPrivate(ECDiffieHellman priv)
         {
             byte[] spki = priv.ExportSubjectPublicKeyInfo();
-            var rsa = RSA.Create();
-            rsa.ImportSubjectPublicKeyInfo(spki, out _);
-            return rsa;
+            var e = ECDiffieHellman.Create();
+            e.ImportSubjectPublicKeyInfo(spki, out _);
+            return e;
         }
 
         private void UiAddRecipient()
         {
-            if (_myPrivateKey == null || !_isOwnerKeyLoaded)
-            {
-                MessageBox.Show(this, "You must load the owner private key to modify recipients.", "Add recipient",
-                    MessageBoxButtons.OK, MessageBoxIcon.Warning);
-                return;
-            }
-
-            if (_container.Version != HSTRYContainer.CurrentVersion)
+            if (_mySigningPrivateKey == null || !_isOwnerKeyLoaded)
             {
                 MessageBox.Show(this,
-                    "This container is not V4. Upgrade it to V4 before editing recipients or block rights.",
+                    "Load the owner ECDH private key and ensure the owner signing key exists (*.hstrysigpriv) to modify recipients.",
                     "Add recipient",
                     MessageBoxButtons.OK,
                     MessageBoxIcon.Warning);
@@ -545,8 +613,8 @@ namespace HSTRYDoc
 
             try
             {
-                using var pub = HSTRYContainer.RsaKeyFiles.LoadPublicKeySpki(ofd.FileName);
-                _container.AddRecipient(_myPrivateKey, pub);
+                using var pub = HSTRYContainer.EcdhKeyFiles.LoadPublicKeySpki(ofd.FileName);
+                _container.AddRecipient(_mySigningPrivateKey, pub);
 
                 ContainerChanged = true;
                 RefreshRecipientsList();
@@ -564,17 +632,10 @@ namespace HSTRYDoc
             if (lvwRecipients.SelectedItems.Count == 0)
                 return;
 
-            if (_myPrivateKey == null || !_isOwnerKeyLoaded)
-            {
-                MessageBox.Show(this, "You must load the owner private key to modify recipients.", "Remove recipient",
-                    MessageBoxButtons.OK, MessageBoxIcon.Warning);
-                return;
-            }
-
-            if (_container.Version != HSTRYContainer.CurrentVersion)
+            if (_mySigningPrivateKey == null || !_isOwnerKeyLoaded)
             {
                 MessageBox.Show(this,
-                    "This container is not V4. Upgrade it to V4 before editing recipients or block rights.",
+                    "Load the owner ECDH private key and ensure the owner signing key exists (*.hstrysigpriv) to modify recipients.",
                     "Remove recipient",
                     MessageBoxButtons.OK,
                     MessageBoxIcon.Warning);
@@ -596,7 +657,7 @@ namespace HSTRYDoc
 
             try
             {
-                if (_container.RemoveRecipientByKeyIdHex(_myPrivateKey, keyIdHex))
+                if (_container.RemoveRecipientByKeyIdHex(_mySigningPrivateKey, keyIdHex))
                 {
                     ContainerChanged = true;
                     RefreshRecipientsList();
@@ -616,7 +677,7 @@ namespace HSTRYDoc
                 return;
 
             string keyIdHex = lvwRecipients.SelectedItems[0].Text;
-            try { Clipboard.SetText(keyIdHex); } catch { /* ignore */ }
+            try { Clipboard.SetText(keyIdHex); } catch { }
         }
 
         private void RefreshRecipientsList()
@@ -629,7 +690,7 @@ namespace HSTRYDoc
                 foreach (var r in _container.Recipients)
                 {
                     string keyIdHex = Convert.ToHexString(r.KeyId);
-                    string alg = r.Alg == 1 ? "RSA-OAEP-SHA256" : $"Alg-{r.Alg}";
+                    string alg = r.Alg == 1 ? "ECDH-HKDF-SHA256-AESGCM" : $"Alg-{r.Alg}";
                     string len = (r.WrappedDek?.Length ?? 0).ToString(CultureInfo.InvariantCulture);
                     string spkiLen = (r.PublicKeySpki?.Length ?? 0).ToString(CultureInfo.InvariantCulture);
 
@@ -650,50 +711,56 @@ namespace HSTRYDoc
 
         private void UpdateMyRecipientStatusAndPermissions()
         {
-            bool hasKey = _myPrivateKey != null && !string.IsNullOrWhiteSpace(_myKeyIdHex);
-
-            bool included = hasKey && _container.Recipients.Any(r =>
+            bool hasEcdh = _myEcdhPrivateKey != null && !string.IsNullOrWhiteSpace(_myKeyIdHex);
+            bool included = hasEcdh && _container.Recipients.Any(r =>
                 Convert.ToHexString(r.KeyId).Equals(_myKeyIdHex!, StringComparison.OrdinalIgnoreCase));
 
-            bool isV4 = _container.Version == HSTRYContainer.CurrentVersion;
-            bool canModify = hasKey && _isOwnerKeyLoaded && isV4;
+            bool isV6 = _container.Version == HSTRYContainer.CurrentVersion;
+
+            bool canModify = hasEcdh && _isOwnerKeyLoaded && isV6 && _mySigningPrivateKey != null;
 
             btnAddRecipient.Enabled = canModify;
             btnRemoveRecipient.Enabled = canModify;
             btnAddMyself.Enabled = canModify && !included;
-            btnTransferOwnership.Enabled = canModify;
+
+            btnTransferOwnership.Enabled = canModify; // ownership also needs both keys
 
             bool hasRecipientSelection = lvwRecipients.SelectedItems.Count > 0;
             bool hasBlockSelection = lvwBlocks.SelectedItems.Count > 0;
             bool hasAnyBlocks = _container.Blocks.Count > 0;
 
-            grpBlockAccess.Enabled = isV4;
+            grpBlockAccess.Enabled = isV6;
 
-            // Selected-only buttons
             btnGrantRead.Enabled = canModify && hasRecipientSelection && hasBlockSelection;
             btnRevokeAccess.Enabled = canModify && hasRecipientSelection && hasBlockSelection;
 
-            // All-block buttons
             btnGrantWrite.Enabled = canModify && hasRecipientSelection && hasAnyBlocks;
             btnGrantReadAll.Enabled = canModify && hasRecipientSelection && hasAnyBlocks;
             btnRevokeAll.Enabled = canModify && hasRecipientSelection && hasAnyBlocks;
 
-            if (!hasKey)
+            if (!hasEcdh)
             {
                 lblMyRecipientStatus.Text = "No private key loaded";
                 lblMyRecipientStatus.ForeColor = SystemColors.ControlText;
                 return;
             }
 
-            if (!isV4)
+            if (!isV6)
             {
-                lblMyRecipientStatus.Text = "Key loaded. This container is not V4. Upgrade to V4 to edit recipients or block rights.";
+                lblMyRecipientStatus.Text = "Key loaded. This container is not V6.";
                 lblMyRecipientStatus.ForeColor = Color.DarkRed;
                 return;
             }
 
             if (_isOwnerKeyLoaded)
             {
+                if (_mySigningPrivateKey == null)
+                {
+                    lblMyRecipientStatus.Text = "Owner ECDH key loaded, but owner signing key is missing (*.hstrysigpriv).";
+                    lblMyRecipientStatus.ForeColor = Color.DarkRed;
+                    return;
+                }
+
                 if (included)
                 {
                     lblMyRecipientStatus.Text = "Owner key loaded. Your key is included as a recipient.";
@@ -723,7 +790,6 @@ namespace HSTRYDoc
         // ============================================================
         // Block list UI
         // ============================================================
-
         private RecipientEntry? GetSelectedRecipient()
         {
             if (lvwRecipients.SelectedItems.Count == 0)
@@ -757,7 +823,7 @@ namespace HSTRYDoc
 
                 if (_container.Version != HSTRYContainer.CurrentVersion)
                 {
-                    lblBlockAccessHint.Text = "Block access control requires V4.";
+                    lblBlockAccessHint.Text = "Block access control requires V6.";
                     return;
                 }
 
@@ -804,19 +870,18 @@ namespace HSTRYDoc
         // ============================================================
         // Selected-only operations (sync)
         // ============================================================
-
         private void UiGrantReadSelectedBlock()
         {
             if (_container.Version != HSTRYContainer.CurrentVersion)
             {
-                MessageBox.Show(this, "Block access control requires V4.", "Block access",
+                MessageBox.Show(this, "Block access control requires V6.", "Block access",
                     MessageBoxButtons.OK, MessageBoxIcon.Warning);
                 return;
             }
 
-            if (_myPrivateKey == null || !_isOwnerKeyLoaded)
+            if (_myEcdhPrivateKey == null || !_isOwnerKeyLoaded)
             {
-                MessageBox.Show(this, "Load the owner private key to edit block rights.", "Block access",
+                MessageBox.Show(this, "Load the owner ECDH private key to edit block rights.", "Block access",
                     MessageBoxButtons.OK, MessageBoxIcon.Warning);
                 return;
             }
@@ -844,10 +909,10 @@ namespace HSTRYDoc
                 if (slot != null && (slot.Rights & BlockRights.Read) != 0)
                     return;
 
-                using var rsaPub = RSA.Create();
-                rsaPub.ImportSubjectPublicKeyInfo(rec.PublicKeySpki, out _);
+                using var recPub = ECDiffieHellman.Create();
+                recPub.ImportSubjectPublicKeyInfo(rec.PublicKeySpki, out _);
 
-                _container.GrantBlockAccess(_myPrivateKey, idx, rsaPub, BlockRights.Read, replaceExisting: true);
+                _container.GrantBlockAccess(_myEcdhPrivateKey, idx, recPub, BlockRights.Read, replaceExisting: true);
 
                 ContainerChanged = true;
                 RefreshBlocksList();
@@ -862,14 +927,14 @@ namespace HSTRYDoc
         {
             if (_container.Version != HSTRYContainer.CurrentVersion)
             {
-                MessageBox.Show(this, "Block access control requires V4.", "Block access",
+                MessageBox.Show(this, "Block access control requires V6.", "Block access",
                     MessageBoxButtons.OK, MessageBoxIcon.Warning);
                 return;
             }
 
-            if (_myPrivateKey == null || !_isOwnerKeyLoaded)
+            if (_myEcdhPrivateKey == null || !_isOwnerKeyLoaded)
             {
-                MessageBox.Show(this, "Load the owner private key to edit block rights.", "Block access",
+                MessageBox.Show(this, "Load the owner ECDH private key to edit block rights.", "Block access",
                     MessageBoxButtons.OK, MessageBoxIcon.Warning);
                 return;
             }
@@ -889,7 +954,7 @@ namespace HSTRYDoc
                     if (!_container.Blocks[idx].KeySlots.Any(s => s.KeyId.SequenceEqual(rec.KeyId)))
                         continue;
 
-                    _container.RevokeBlockAccess(_myPrivateKey, idx, keyIdHex);
+                    _container.RevokeBlockAccess(_myEcdhPrivateKey, idx, keyIdHex);
                 }
 
                 ContainerChanged = true;
@@ -904,19 +969,18 @@ namespace HSTRYDoc
         // ============================================================
         // Bulk operations (async + reporterDiag)
         // ============================================================
-
         private async Task UiGrantReadAllBlocksAsync()
         {
             if (_container.Version != HSTRYContainer.CurrentVersion)
             {
-                MessageBox.Show(this, "Block access control requires V4.", "Block access",
+                MessageBox.Show(this, "Block access control requires V6.", "Block access",
                     MessageBoxButtons.OK, MessageBoxIcon.Warning);
                 return;
             }
 
-            if (_myPrivateKey == null || !_isOwnerKeyLoaded)
+            if (_myEcdhPrivateKey == null || !_isOwnerKeyLoaded)
             {
-                MessageBox.Show(this, "Load the owner private key to edit block rights.", "Block access",
+                MessageBox.Show(this, "Load the owner ECDH private key to edit block rights.", "Block access",
                     MessageBoxButtons.OK, MessageBoxIcon.Warning);
                 return;
             }
@@ -948,20 +1012,19 @@ namespace HSTRYDoc
             SetUiBusy(true);
             try
             {
-                byte[] recSpki = rec.PublicKeySpki.ToArray(); // stable for async
+                byte[] recSpki = rec.PublicKeySpki.ToArray();
 
                 await reporterDiag.RunAsync(
                     owner: this,
                     title: "Grant read (all)",
                     work: async (progress, token) =>
                     {
-                        using var rsaPub = RSA.Create();
-                        rsaPub.ImportSubjectPublicKeyInfo(recSpki, out _);
+                        using var recPub = ECDiffieHellman.Create();
+                        recPub.ImportSubjectPublicKeyInfo(recSpki, out _);
 
                         await Task.Run(() =>
                         {
-                            // requires HSTRYContainer.GrantReadAllBlocks(...)
-                            _container.GrantReadAllBlocks(_myPrivateKey, rsaPub, progress, token);
+                            _container.GrantReadAllBlocks(_myEcdhPrivateKey, recPub, progress, token);
                         }, token);
                     });
 
@@ -989,14 +1052,14 @@ namespace HSTRYDoc
         {
             if (_container.Version != HSTRYContainer.CurrentVersion)
             {
-                MessageBox.Show(this, "Block access control requires V4.", "Block access",
+                MessageBox.Show(this, "Block access control requires V6.", "Block access",
                     MessageBoxButtons.OK, MessageBoxIcon.Warning);
                 return;
             }
 
-            if (_myPrivateKey == null || !_isOwnerKeyLoaded)
+            if (_myEcdhPrivateKey == null || !_isOwnerKeyLoaded)
             {
-                MessageBox.Show(this, "Load the owner private key to edit block rights.", "Block access",
+                MessageBox.Show(this, "Load the owner ECDH private key to edit block rights.", "Block access",
                     MessageBoxButtons.OK, MessageBoxIcon.Warning);
                 return;
             }
@@ -1035,13 +1098,12 @@ namespace HSTRYDoc
                     title: "Grant write (all)",
                     work: async (progress, token) =>
                     {
-                        using var rsaPub = RSA.Create();
-                        rsaPub.ImportSubjectPublicKeyInfo(recSpki, out _);
+                        using var recPub = ECDiffieHellman.Create();
+                        recPub.ImportSubjectPublicKeyInfo(recSpki, out _);
 
                         await Task.Run(() =>
                         {
-                            // requires HSTRYContainer.GrantWriteAllBlocks(...)
-                            _container.GrantWriteAllBlocks(_myPrivateKey, rsaPub, progress, token);
+                            _container.GrantWriteAllBlocks(_myEcdhPrivateKey, recPub, progress, token);
                         }, token);
                     });
 
@@ -1069,14 +1131,14 @@ namespace HSTRYDoc
         {
             if (_container.Version != HSTRYContainer.CurrentVersion)
             {
-                MessageBox.Show(this, "Block access control requires V4.", "Block access",
+                MessageBox.Show(this, "Block access control requires V6.", "Block access",
                     MessageBoxButtons.OK, MessageBoxIcon.Warning);
                 return;
             }
 
-            if (_myPrivateKey == null || !_isOwnerKeyLoaded)
+            if (_myEcdhPrivateKey == null || !_isOwnerKeyLoaded)
             {
-                MessageBox.Show(this, "Load the owner private key to edit block rights.", "Block access",
+                MessageBox.Show(this, "Load the owner ECDH private key to edit block rights.", "Block access",
                     MessageBoxButtons.OK, MessageBoxIcon.Warning);
                 return;
             }
@@ -1110,8 +1172,7 @@ namespace HSTRYDoc
                     {
                         await Task.Run(() =>
                         {
-                            // requires HSTRYContainer.RevokeAllBlocks(...)
-                            _container.RevokeAllBlocks(_myPrivateKey, keyIdCopy, progress, token);
+                            _container.RevokeAllBlocks(_myEcdhPrivateKey, keyIdCopy, progress, token);
                         }, token);
                     });
 
@@ -1138,8 +1199,11 @@ namespace HSTRYDoc
         protected override void OnFormClosed(FormClosedEventArgs e)
         {
             base.OnFormClosed(e);
-            _myPrivateKey?.Dispose();
-            _myPrivateKey = null;
+            _myEcdhPrivateKey?.Dispose();
+            _myEcdhPrivateKey = null;
+
+            _mySigningPrivateKey?.Dispose();
+            _mySigningPrivateKey = null;
         }
     }
 }

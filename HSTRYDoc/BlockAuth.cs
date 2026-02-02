@@ -1,11 +1,14 @@
-﻿// BlockAuth.cs
+﻿// BlockAuth.cs (V5 compatible)
 // V2 AD (legacy): version + index + created + modified + prevHash + titleLen + title(utf8)
-// V3 AD (current): version + purpose + index + created + modified + prevHash
-// V4 AD (access-controlled): version + purpose + index + created + modified + prevHash + accessHash(32)
+// V3 AD (legacy): version + purpose + index + created + modified + prevHash
+// V4 AD: version + purpose + index + created + modified + prevHash + accessHash(32)
+// V5 AD (ECC container): SAME AS V4:
+//     version + purpose + index + created + modified + prevHash + accessHash(32)
+//
 // Notes:
-// - In V3/V4, title is encrypted, so it is NOT embedded plaintext in AD.
+// - In V5, title is encrypted, so it is NOT embedded plaintext in AD.
 // - purpose separates title/body so ciphertexts cannot be swapped.
-// - V4 accessHash binds KeySlots (KeyId + Rights + Alg + WrappedBek) into AEAD authentication,
+// - accessHash binds KeySlots (KeyId + Rights + Alg + WrappedBek) into AEAD authentication,
 //   preventing slot tampering without re-encryption.
 
 using System;
@@ -74,10 +77,10 @@ namespace HSTRYDoc
                 return adV3;
             }
 
-            if (containerVersion != 4)
+            // V4/V5: version + purpose + index + created + modified + prevHash + accessHash(32)
+            if (containerVersion != 4 && containerVersion != 5)
                 throw new InvalidOperationException("Unsupported container version for AD.");
 
-            // V4: version + purpose + index + created + modified + prevHash + accessHash
             byte[] accessHash = ComputeAccessHashV4(b);
 
             int lenV4 = 1 + 1 + 4 + 8 + 8 + Crypto.Sha256Size + Crypto.Sha256Size;
@@ -85,7 +88,7 @@ namespace HSTRYDoc
             byte[] adV4 = new byte[lenV4];
             int q = 0;
 
-            adV4[q++] = containerVersion;
+            adV4[q++] = containerVersion; // binds exact version (4 vs 5)
             adV4[q++] = purpose;
 
             BinaryPrimitives.WriteInt32LittleEndian(adV4.AsSpan(q, 4), b.Index);
@@ -104,6 +107,7 @@ namespace HSTRYDoc
             return adV4;
         }
 
+        // Keep name for compatibility; in V5 this still applies.
         public static byte[] ComputeAccessHashV4(Block b)
         {
             using var ms = new MemoryStream();

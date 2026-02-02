@@ -39,8 +39,13 @@ namespace HSTRYDoc
 
         private readonly AppState _appState = AppState.Load();
 
-        // Private key used to open the current container (V2-only)
-        private string? _privateKeyPath;
+        // V5: ECDH private key used to open the container (membership + BEK unwrap)
+        private string? _ecdhPrivateKeyPath;
+
+        private static string DeriveSigningPrivateKeyPath(string ecdhPrivPath)
+    => Path.ChangeExtension(ecdhPrivPath, ".hstrysigpriv");
+
+
 
         // Auto-complete
         private RtfAutoComplete? _rtfAutoComplete;
@@ -88,23 +93,22 @@ namespace HSTRYDoc
             }
 
             // Remember current key path to detect changes
-            string? oldKeyPath = _privateKeyPath;
+            string? oldKeyPath = _ecdhPrivateKeyPath;
 
-            using var dlg = new KeyManagerDialog(_container, _containerPath!, _privateKeyPath);
+            using var dlg = new KeyManagerDialog(_container, _containerPath!, _ecdhPrivateKeyPath);
             if (dlg.ShowDialog(this) != DialogResult.OK)
                 return;
 
-            // Update key path from dialog
-            _privateKeyPath = dlg.SelectedPrivateKeyPath;
+            _ecdhPrivateKeyPath = dlg.SelectedEcdhPrivateKeyPath;
 
-            // Persist into AppState (only if exists)
-            if (!string.IsNullOrWhiteSpace(_privateKeyPath) && File.Exists(_privateKeyPath))
+            // Persist into AppState (ECDH key only)
+            if (!string.IsNullOrWhiteSpace(_ecdhPrivateKeyPath) && File.Exists(_ecdhPrivateKeyPath))
             {
-                _appState.PrivateKeyPath = _privateKeyPath;
+                _appState.PrivateKeyPath = _ecdhPrivateKeyPath;
                 _appState.Save();
             }
 
-            // If the dialog changed the container (recipients / block access), save it now.
+            // If container changed in dialog -> save now
             if (dlg.ContainerChanged)
             {
                 try
@@ -122,17 +126,15 @@ namespace HSTRYDoc
                 }
             }
 
-            // If user selected a different key in the dialog, we MUST reload the container
-            // so V4 per-block BEKs and rights get applied for the new identity.
+            // If user selected different ECDH key -> reload container to apply rights
             bool keyChanged =
-                !string.Equals(oldKeyPath ?? string.Empty, _privateKeyPath ?? string.Empty, StringComparison.OrdinalIgnoreCase) &&
-                !string.IsNullOrWhiteSpace(_privateKeyPath) && File.Exists(_privateKeyPath);
+                !string.Equals(oldKeyPath ?? string.Empty, _ecdhPrivateKeyPath ?? string.Empty, StringComparison.OrdinalIgnoreCase) &&
+                !string.IsNullOrWhiteSpace(_ecdhPrivateKeyPath) && File.Exists(_ecdhPrivateKeyPath);
 
             if (keyChanged)
             {
                 int keepIndex = _currentBlockIndex;
-
-                bool ok = await ReloadContainerWithPrivateKeyAsync(_containerPath!, _privateKeyPath!, keepIndex);
+                bool ok = await ReloadContainerWithPrivateKeyAsync(_containerPath!, _ecdhPrivateKeyPath!, keepIndex);
                 if (!ok)
                     return;
             }
@@ -140,7 +142,7 @@ namespace HSTRYDoc
             UpdateUiState();
         }
 
-        private async Task<bool> ReloadContainerWithPrivateKeyAsync(string containerPath, string privateKeyPath, int keepSelectedIndex)
+        private async Task<bool> ReloadContainerWithPrivateKeyAsync(string containerPath, string ecdhPrivateKeyPath, int keepSelectedIndex)
         {
             try
             {
@@ -149,22 +151,16 @@ namespace HSTRYDoc
                     title: "Reloading container",
                     work: async (progress, token) =>
                     {
-                        progress.Report(new UiProgress
-                        {
-                            Message = "Reloading container ",
-                            Indeterminate = true
-                        });
-
-                        return await Task.Run(() => HSTRYContainer.LoadWithPrivateKeyFile(containerPath, privateKeyPath), token);
+                        progress.Report(new UiProgress { Message = "Reloading container ", Indeterminate = true });
+                        return await Task.Run(() => HSTRYContainer.LoadWithPrivateKeyFile(containerPath, ecdhPrivateKeyPath), token);
                     });
 
-                // Stop background hash workers before swapping container
                 CancelHashWorkers();
 
                 _container?.CloseKeyMaterial();
                 _container = loaded;
                 _containerPath = containerPath;
-                _privateKeyPath = privateKeyPath;
+                _ecdhPrivateKeyPath = ecdhPrivateKeyPath;
 
                 _blockDirty = false;
                 _containerDirty = false;
@@ -173,9 +169,7 @@ namespace HSTRYDoc
 
                 int newIndex = -1;
                 if (_container.Blocks.Count > 0)
-                {
                     newIndex = Math.Clamp(keepSelectedIndex, 0, _container.Blocks.Count - 1);
-                }
 
                 if (newIndex >= 0)
                 {
@@ -208,13 +202,13 @@ namespace HSTRYDoc
         private bool IsOwnerKeyLoadedForCurrentContainer()
         {
             if (_container == null) return false;
-            if (string.IsNullOrWhiteSpace(_privateKeyPath) || !File.Exists(_privateKeyPath)) return false;
+            if (string.IsNullOrWhiteSpace(_ecdhPrivateKeyPath) || !File.Exists(_ecdhPrivateKeyPath)) return false;
 
             try
             {
-                using RSA priv = HSTRYContainer.RsaKeyFiles.LoadPrivateKeyPkcs8(_privateKeyPath);
-                byte[] spki = priv.ExportSubjectPublicKeyInfo();
-                return spki.SequenceEqual(_container.OwnerPublicKeySpki);
+                using var ecdh = HSTRYContainer.EcdhKeyFiles.LoadPrivateKeyPkcs8(_ecdhPrivateKeyPath);
+                byte[] spki = ecdh.ExportSubjectPublicKeyInfo();
+                return spki.SequenceEqual(_container.OwnerEcdhPublicKeySpki);
             }
             catch
             {
@@ -236,11 +230,11 @@ namespace HSTRYDoc
                 return;
             }
 
-            // Variant 1: Only owner can create blocks
+            // Only owner can create blocks (Variant 1)
             if (_container.Version == HSTRYContainer.CurrentVersion && !IsOwnerKeyLoadedForCurrentContainer())
             {
                 MessageBox.Show(this,
-                    "Access denied.\n\nWith V4 Variant 1, only the owner can create new blocks.\nLoad the owner private key first.",
+                    "Access denied.\n\nOnly the owner can create new blocks.\nLoad the owner ECDH private key first.",
                     "Test blocks",
                     MessageBoxButtons.OK,
                     MessageBoxIcon.Warning);
@@ -255,7 +249,6 @@ namespace HSTRYDoc
 
             try
             {
-                // Stop hashing before bulk mutation
                 CancelHashWorkers();
 
                 await reporterDiag.RunAsync(
@@ -283,7 +276,6 @@ namespace HSTRYDoc
 
                                 int wCount = RandomNumberGenerator.GetInt32(minWordsPerBlock, maxWordsPerBlock + 1);
                                 string plain = BuildRandomParagraphs(words, wCount);
-
                                 string rtf = BuildSimpleRtf(title, plain);
 
                                 _container!.AddRtfDocument(title, rtf);
@@ -612,11 +604,11 @@ namespace HSTRYDoc
         // ============================================================
         // Interactive key selection dialog (Default vs USB(HSTRY_KEY) vs Manual)
         // ============================================================
-        private bool ResolvePrivateKeyInteractive(string containerPath, out string privateKeyPath)
+        private bool ResolvePrivateKeyInteractive(string containerPath, out string ecdhPrivateKeyPath)
         {
-            privateKeyPath = string.Empty;
+            ecdhPrivateKeyPath = string.Empty;
 
-            // 1) ONLY when opening a container: optionally scan drives
+            // 1) Optional drive scan
             if (_appState.UseDriveKeySearch)
             {
                 var outcome = TryResolvePrivateKeyFromDrivesInteractive(out string? sessionKey);
@@ -625,22 +617,20 @@ namespace HSTRYDoc
                     !string.IsNullOrWhiteSpace(sessionKey) &&
                     File.Exists(sessionKey))
                 {
-                    // Session-only: do NOT overwrite AppState.PrivateKeyPath
-                    _privateKeyPath = sessionKey;
-                    privateKeyPath = sessionKey;
+                    _ecdhPrivateKeyPath = sessionKey; // session-only
+                    ecdhPrivateKeyPath = sessionKey;
                     return true;
                 }
-                // If user declines / none found -> fallback below
             }
 
             // 2) Fallback: stored path / create-select flow
             if (!EnsurePrivateKeyConfiguredInteractive())
                 return false;
 
-            if (string.IsNullOrWhiteSpace(_privateKeyPath) || !File.Exists(_privateKeyPath))
+            if (string.IsNullOrWhiteSpace(_ecdhPrivateKeyPath) || !File.Exists(_ecdhPrivateKeyPath))
                 return false;
 
-            privateKeyPath = _privateKeyPath!;
+            ecdhPrivateKeyPath = _ecdhPrivateKeyPath!;
             return true;
         }
 
@@ -929,7 +919,7 @@ namespace HSTRYDoc
         // ============================================================
         private async Task<bool> OpenContainerFromPathAsync(string path)
         {
-            if (!ResolvePrivateKeyInteractive(path, out string privPath))
+            if (!ResolvePrivateKeyInteractive(path, out string ecdhPrivPath))
                 return false;
 
             try
@@ -939,22 +929,16 @@ namespace HSTRYDoc
                     title: "Opening container",
                     work: async (progress, token) =>
                     {
-                        progress.Report(new UiProgress
-                        {
-                            Message = "Opening container ",
-                            Indeterminate = true
-                        });
-
-                        return await Task.Run(() => HSTRYContainer.LoadWithPrivateKeyFile(path, privPath), token);
+                        progress.Report(new UiProgress { Message = "Opening container ", Indeterminate = true });
+                        return await Task.Run(() => HSTRYContainer.LoadWithPrivateKeyFile(path, ecdhPrivPath), token);
                     });
 
-                // IMPORTANT: stop running hash jobs before switching container/list
                 CancelHashWorkers();
 
                 _container?.CloseKeyMaterial();
                 _container = loaded;
                 _containerPath = path;
-                _privateKeyPath = privPath;
+                _ecdhPrivateKeyPath = ecdhPrivPath;
 
                 _currentBlockIndex = -1;
                 _blockDirty = false;
@@ -967,12 +951,17 @@ namespace HSTRYDoc
                 _appState.TouchRecentFile(path);
                 _appState.Save();
 
-                // NEW: Offer upgrade to V4 (Option A)
-                await MaybeOfferUpgradeToV4Async();
-
-                // After possible upgrade/reload, rebuild autocomplete
                 RebuildAutoCompleteWordsFromEditor();
                 return true;
+            }
+            catch (InvalidDataException ex) when (ex.Message.Contains("Unsupported container version", StringComparison.OrdinalIgnoreCase))
+            {
+                MessageBox.Show(this,
+                    "This file was created with a different container version.\n\nThis build supports V6 only.",
+                    "Open container",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Warning);
+                return false;
             }
             catch (OperationCanceledException)
             {
@@ -985,167 +974,6 @@ namespace HSTRYDoc
             }
         }
 
-        private async Task MaybeOfferUpgradeToV4Async()
-        {
-            if (_container == null || string.IsNullOrWhiteSpace(_containerPath))
-                return;
-
-            // Already V4 => nothing to do
-            if (_container.Version == HSTRYContainer.CurrentVersion)
-                return;
-
-            // Need owner key to upgrade (because upgrade rewrites recipients and resigns header)
-            if (string.IsNullOrWhiteSpace(_privateKeyPath) || !File.Exists(_privateKeyPath))
-                return;
-
-            bool isOwner;
-            try
-            {
-                using RSA priv = HSTRYContainer.RsaKeyFiles.LoadPrivateKeyPkcs8(_privateKeyPath!);
-                isOwner = priv.ExportSubjectPublicKeyInfo().SequenceEqual(_container.OwnerPublicKeySpki);
-            }
-            catch
-            {
-                return;
-            }
-
-            if (!isOwner)
-                return;
-
-            var ask = MessageBox.Show(
-                this,
-                "This container is an older format (V2/V3).\n\n" +
-                "Upgrade to V4 now to enable per-block access control?",
-                "Upgrade to V4",
-                MessageBoxButtons.YesNo,
-                MessageBoxIcon.Question,
-                MessageBoxDefaultButton.Button1);
-
-            if (ask != DialogResult.Yes)
-                return;
-
-            // Collect all recipients' public keys (required because V2/V3 header does NOT store SPKIs)
-            // We'll guide the user to select multiple .hstrypub files.
-            var pubs = await UiCollectRecipientPublicKeysForUpgradeAsync();
-            if (pubs == null || pubs.Count == 0)
-                return;
-
-            await UiUpgradeContainerToV4Async(pubs);
-        }
-
-
-        private async Task<List<RSA>?> UiCollectRecipientPublicKeysForUpgradeAsync()
-        {
-            if (_container == null) return null;
-
-            MessageBox.Show(
-                this,
-                "To upgrade to V4, you must provide the PUBLIC keys (.hstrypub) for ALL recipients currently in the container.\n\n" +
-                "Tip: Select multiple files at once.",
-                "Upgrade to V4",
-                MessageBoxButtons.OK,
-                MessageBoxIcon.Information);
-
-            using var ofd = new OpenFileDialog
-            {
-                Filter = "HSTRY Public Key (*.hstrypub)|*.hstrypub|All files (*.*)|*.*",
-                Title = "Select ALL recipient public keys (.hstrypub)",
-                Multiselect = true,
-                CheckFileExists = true
-            };
-
-            if (ofd.ShowDialog(this) != DialogResult.OK)
-                return null;
-
-            if (ofd.FileNames == null || ofd.FileNames.Length == 0)
-                return null;
-
-            // Load RSA pubs
-            var list = new List<RSA>();
-            try
-            {
-                foreach (string f in ofd.FileNames)
-                {
-                    if (!File.Exists(f)) continue;
-                    // note: LoadPublicKeySpki returns RSA; must Dispose later after upgrade
-                    list.Add(HSTRYContainer.RsaKeyFiles.LoadPublicKeySpki(f));
-                }
-                return list;
-            }
-            catch (Exception ex)
-            {
-                // Dispose already loaded
-                foreach (var r in list) r.Dispose();
-                MessageBox.Show(this, ex.Message, "Upgrade to V4", MessageBoxButtons.OK, MessageBoxIcon.Error);
-                return null;
-            }
-        }
-
-        private async Task UiUpgradeContainerToV4Async(List<RSA> recipientPubs)
-        {
-            if (_container == null || string.IsNullOrWhiteSpace(_containerPath) || string.IsNullOrWhiteSpace(_privateKeyPath))
-                return;
-
-            try
-            {
-                // Commit current block before rewriting everything
-                if (!MaybeCommitCurrentBlock())
-                    return;
-
-                await reporterDiag.RunAsync<object>(
-                    owner: this,
-                    title: "Upgrading to V4",
-                    work: async (progress, token) =>
-                    {
-                        progress.Report(new UiProgress
-                        {
-                            Message = "Upgrading container ",
-                            Indeterminate = true
-                        });
-
-                        await Task.Run(() =>
-                        {
-                            using RSA ownerPriv = HSTRYContainer.RsaKeyFiles.LoadPrivateKeyPkcs8(_privateKeyPath!);
-
-                            // Default for non-owner: Read access to all blocks after upgrade
-                            _container!.UpgradeToV4(ownerPriv, recipientPubs, nonOwnerDefaultRights: BlockRights.Read);
-
-                            // Save upgraded container
-                            _container!.Save(_containerPath!);
-                        }, token);
-
-                        return new object();
-                    });
-
-                // After upgrade we MUST reload to hydrate BEKs/rights for the active key cleanly.
-                int keepIndex = _currentBlockIndex;
-                await ReloadContainerWithPrivateKeyAsync(_containerPath!, _privateKeyPath!, keepIndex);
-
-                MessageBox.Show(
-                    this,
-                    "Upgrade completed.\n\nThe container is now V4 and supports per-block access control.",
-                    "Upgrade to V4",
-                    MessageBoxButtons.OK,
-                    MessageBoxIcon.Information);
-
-                _containerDirty = false;
-                UpdateUiState();
-            }
-            catch (OperationCanceledException)
-            {
-                // ignore
-            }
-            catch (Exception ex)
-            {
-                MessageBox.Show(this, ex.Message, "Upgrade to V4", MessageBoxButtons.OK, MessageBoxIcon.Error);
-            }
-            finally
-            {
-                // Always dispose the RSA objects we created from pub files
-                foreach (var r in recipientPubs)
-                    r.Dispose();
-            }
-        }
 
         // ============================================================
         // UI wiring
@@ -1339,14 +1167,24 @@ namespace HSTRYDoc
         // ============================================================
         private async Task<bool> UiCreateNewContainerAsync(bool initialStartup = false)
         {
-            // DO NOT auto-generate keys anymore
             if (!EnsurePrivateKeyConfiguredInteractive())
                 return false;
 
-            if (string.IsNullOrWhiteSpace(_privateKeyPath) || !File.Exists(_privateKeyPath))
+            if (string.IsNullOrWhiteSpace(_ecdhPrivateKeyPath) || !File.Exists(_ecdhPrivateKeyPath))
             {
-                MessageBox.Show(this, "No private key is configured.", "Create container",
+                MessageBox.Show(this, "No ECDH private key is configured.", "Create container",
                     MessageBoxButtons.OK, MessageBoxIcon.Error);
+                return false;
+            }
+
+            string signPath = DeriveSigningPrivateKeyPath(_ecdhPrivateKeyPath);
+            if (!File.Exists(signPath))
+            {
+                MessageBox.Show(this,
+                    "Owner signing key is missing.\n\nExpected file:\n" + signPath,
+                    "Create container",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Error);
                 return false;
             }
 
@@ -1364,7 +1202,6 @@ namespace HSTRYDoc
 
             string containerPath = sfd.FileName;
 
-
             try
             {
                 HSTRYContainer created = await reporterDiag.RunAsync(
@@ -1376,11 +1213,13 @@ namespace HSTRYDoc
 
                         return await Task.Run(() =>
                         {
-                            using RSA ownerPriv = HSTRYContainer.RsaKeyFiles.LoadPrivateKeyPkcs8(_privateKeyPath);
+                            using var ownerEcdh = HSTRYContainer.EcdhKeyFiles.LoadPrivateKeyPkcs8(_ecdhPrivateKeyPath!);
+                            using var ownerSig = HSTRYContainer.EcdsaKeyFiles.LoadPrivateKeyPkcs8(signPath);
 
                             HSTRYContainer c = HSTRYContainer.CreateNewForRecipients(
-                                ownerPrivateKey: ownerPriv,
-                                recipientPublicKeys: new[] { ownerPriv },
+                                ownerSigningPrivateKey: ownerSig,
+                                ownerEcdhPrivateKey: ownerEcdh,
+                                recipientEcdhPublicKeys: new[] { ownerEcdh },
                                 encoding: Global.CurrentEditorEncoding);
 
                             c.Save(containerPath);
@@ -1388,7 +1227,6 @@ namespace HSTRYDoc
                         }, token);
                     });
 
-                // IMPORTANT: stop running hash jobs before switching container/list
                 CancelHashWorkers();
 
                 _container?.CloseKeyMaterial();
@@ -3431,19 +3269,18 @@ namespace HSTRYDoc
 
         private bool EnsurePrivateKeyConfiguredInteractive()
         {
-            // 1) Fallback: stored path in AppState
+            // Stored path in AppState = ECDH private key
             if (!string.IsNullOrWhiteSpace(_appState.PrivateKeyPath) && File.Exists(_appState.PrivateKeyPath))
             {
-                _privateKeyPath = _appState.PrivateKeyPath;
+                _ecdhPrivateKeyPath = _appState.PrivateKeyPath;
                 return true;
             }
 
-            // 2) No fallback -> ask create/select
             var res = MessageBox.Show(
                 this,
                 "No private key is configured.\n\n" +
-                "Yes: Create a new key pair\n" +
-                "No:  Select an existing private key\n" +
+                "Yes: Create a new key set (ECDH + ECDSA)\n" +
+                "No:  Select an existing ECDH private key\n" +
                 "Cancel: Exit",
                 "Private key setup",
                 MessageBoxButtons.YesNoCancel,
@@ -3453,38 +3290,40 @@ namespace HSTRYDoc
                 return false;
 
             if (res == DialogResult.Yes)
-                return CreateNewKeyPairInteractiveAndStore();
+                return CreateNewKeySetInteractiveAndStore();
 
-            return SelectExistingPrivateKeyAndStore();
+            return SelectExistingEcdhPrivateKeyAndStore();
         }
 
-        private bool CreateNewKeyPairInteractiveAndStore()
+        private bool CreateNewKeySetInteractiveAndStore()
         {
             using var sfd = new SaveFileDialog
             {
-                Filter = "HSTRY Private Key (*.hstrypriv)|*.hstrypriv|All files (*.*)|*.*",
+                Filter = "HSTRY ECDH Private Key (*.hstrypriv)|*.hstrypriv|All files (*.*)|*.*",
                 DefaultExt = "hstrypriv",
                 AddExtension = true,
                 FileName = "owner.hstrypriv",
-                Title = "Save new private key"
+                Title = "Save new ECDH private key"
             };
 
             if (sfd.ShowDialog(this) != DialogResult.OK)
                 return false;
 
-            string privPath = sfd.FileName;
-            if (string.IsNullOrWhiteSpace(privPath))
+            string ecdhPrivPath = sfd.FileName;
+            if (string.IsNullOrWhiteSpace(ecdhPrivPath))
                 return false;
 
-            string pubPath = Path.ChangeExtension(privPath, ".hstrypub");
+            string ecdhPubPath = Path.ChangeExtension(ecdhPrivPath, ".hstrypub");
+            string signPrivPath = DeriveSigningPrivateKeyPath(ecdhPrivPath);
+            string signPubPath = Path.ChangeExtension(signPrivPath, ".hstrysigpub");
 
-            bool overwrite = File.Exists(privPath) || File.Exists(pubPath);
+            bool overwrite = File.Exists(ecdhPrivPath) || File.Exists(ecdhPubPath) || File.Exists(signPrivPath) || File.Exists(signPubPath);
             if (overwrite)
             {
                 var res = MessageBox.Show(
                     this,
                     "Key files already exist. Overwrite them?",
-                    "Create key pair",
+                    "Create key set",
                     MessageBoxButtons.YesNo,
                     MessageBoxIcon.Warning,
                     MessageBoxDefaultButton.Button2);
@@ -3495,21 +3334,28 @@ namespace HSTRYDoc
 
             try
             {
-                using RSA rsa = HSTRYContainer.RsaKeyFiles.CreateNewKeyPair(3072);
-                HSTRYContainer.RsaKeyFiles.SavePrivateKeyPkcs8(privPath, rsa);
-                HSTRYContainer.RsaKeyFiles.SavePublicKeySpki(pubPath, rsa);
+                using var ecdh = HSTRYContainer.EcdhKeyFiles.CreateNewKeyPair();
+                using var ecdsa = HSTRYContainer.EcdsaKeyFiles.CreateNewKeyPair();
 
-                _privateKeyPath = privPath;
+                HSTRYContainer.EcdhKeyFiles.SavePrivateKeyPkcs8(ecdhPrivPath, ecdh);
+                HSTRYContainer.EcdhKeyFiles.SavePublicKeySpki(ecdhPubPath, ecdh);
 
-                _appState.PrivateKeyPath = privPath;
+                HSTRYContainer.EcdsaKeyFiles.SavePrivateKeyPkcs8(signPrivPath, ecdsa);
+                HSTRYContainer.EcdsaKeyFiles.SavePublicKeySpki(signPubPath, ecdsa);
+
+                _ecdhPrivateKeyPath = ecdhPrivPath;
+
+                _appState.PrivateKeyPath = ecdhPrivPath;
                 _appState.Save();
 
                 MessageBox.Show(
                     this,
-                    "A new key pair was created.\n\n" +
-                    $"Private key:\n{privPath}\n\n" +
-                    $"Public key:\n{pubPath}",
-                    "Key pair created",
+                    "A new key set was created.\n\n" +
+                    $"ECDH private:\n{ecdhPrivPath}\n" +
+                    $"ECDH public:\n{ecdhPubPath}\n\n" +
+                    $"ECDSA signing private:\n{signPrivPath}\n" +
+                    $"ECDSA signing public:\n{signPubPath}",
+                    "Key set created",
                     MessageBoxButtons.OK,
                     MessageBoxIcon.Information);
 
@@ -3517,19 +3363,18 @@ namespace HSTRYDoc
             }
             catch (Exception ex)
             {
-                MessageBox.Show(this, ex.Message, "Create key pair", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                MessageBox.Show(this, ex.Message, "Create key set", MessageBoxButtons.OK, MessageBoxIcon.Error);
                 return false;
             }
         }
 
-
-        private bool SelectExistingPrivateKeyAndStore()
+        private bool SelectExistingEcdhPrivateKeyAndStore()
         {
             using var ofd = new OpenFileDialog
             {
-                Filter = "HSTRY Private Key (*.hstrypriv)|*.hstrypriv|All files (*.*)|*.*",
+                Filter = "HSTRY ECDH Private Key (*.hstrypriv)|*.hstrypriv|All files (*.*)|*.*",
                 CheckFileExists = true,
-                Title = "Select private key"
+                Title = "Select ECDH private key"
             };
 
             if (ofd.ShowDialog(this) != DialogResult.OK)
@@ -3539,8 +3384,7 @@ namespace HSTRYDoc
             if (string.IsNullOrWhiteSpace(chosen) || !File.Exists(chosen))
                 return false;
 
-            _privateKeyPath = chosen;
-
+            _ecdhPrivateKeyPath = chosen;
             _appState.PrivateKeyPath = chosen;
             _appState.Save();
 

@@ -1,20 +1,17 @@
-﻿// Container.cs (V4 current, supports loading V2/V3/V4)
-// - V2: Title stored plaintext, bound into AD (legacy).
-// - V3: Title is AES-GCM encrypted (separate AEAD payload), not stored plaintext.
-// - V4: Per-block access control via per-block BEK (Block Encryption Key, 32 bytes) and KeySlots.
-//       Each block stores KeySlots: KeyId + Rights + RSA-OAEP wrapped BEK.
-//       A recipient can read a block only if they have a KeySlot for it.
-// - Data encryption:
-//     V2/V3: AES-GCM with container DEK (32 bytes).
-//     V4: AES-GCM with per-block BEK (32 bytes).
-// - Key distribution:
-//     Header (V2/V3/V4): container DEK wrapped per recipient via RSA-OAEP-SHA256 (membership).
-//     Blocks (V4): BEK wrapped per recipient per block via RSA-OAEP-SHA256.
-// - Tamper prevention for header recipients: owner signs header via RSA-PSS-SHA256.
-//   Any add/remove recipient requires owner private key to re-sign.
-// - Chain: PrevHash is authenticated via AD (so edits require re-encrypt of subsequent blocks).
-//   NOTE (V4): Because of chaining, editing a block requires write access to ALL subsequent blocks
-//              (to re-encrypt them with updated PrevHash in AD).
+﻿// Container.cs (V6 only, ECC P-384 + ContainerId binding)
+// - Only supports V6 (no migration, no V2/V3/V4/V5 loading).
+// - Header:
+//   - OwnerSigningPublicKeySpki: ECDSA P-384 public key (SPKI)
+//   - OwnerEcdhPublicKeySpki: ECDH P-384 public key (SPKI)
+//   - ContainerId: 32 bytes random, signed, used for key-wrap binding
+//   - Recipients: ECDH public SPKI + KeyId=SHA256(SPKI) + WrappedDek envelope
+//   - HeaderSignature: ECDSA(SHA-256) over header-signing data
+// - Key wrapping (DEK/BEK):
+//   - ECDH ephem (P-384) -> shared secret -> HKDF-SHA256 -> KEK(32) -> AES-GCM wrap
+//   - HKDF/AD bind purpose + recipient KeyId + containerId + epk hash
+// - Data encryption (blocks):
+//   - AES-GCM with per-block BEK (32 bytes)
+// - Access control AD binding and block chain remain as before (V4 logic).
 
 using System;
 using System.Buffers.Binary;
@@ -23,261 +20,52 @@ using System.IO;
 using System.Linq;
 using System.Security.Cryptography;
 using System.Text;
+using System.Threading;
 
 namespace HSTRYDoc
 {
     public sealed class HSTRYContainer
     {
+        // =========================
+        // V6 constants
+        // =========================
+        public const byte CurrentVersion = 6;
+        private const byte V6 = 6;
 
+        // Recipient algs (V6)
+        private const byte RECIPIENT_ALG_ECDH_HKDF_SHA256_AESGCM = 1;
 
-        public void GrantReadAllBlocks(RSA ownerPrivateKey, RSA recipientPublicKey, IProgress<UiProgress> progress, CancellationToken token)
-        {
-            BulkSetAccessAllBlocks(ownerPrivateKey, recipientPublicKey, recipientPublicKeyKeyId: null,
-                mode: BulkAccessMode.GrantReadIfMissing, rights: BlockRights.Read, progress: progress, token: token);
-        }
+        // Header signature algs (V6)
+        private const byte HEADER_SIGALG_ECDSA_P384_SHA256 = 1;
 
-        public void GrantWriteAllBlocks(RSA ownerPrivateKey, RSA recipientPublicKey, IProgress<UiProgress> progress, CancellationToken token)
-        {
-            BulkSetAccessAllBlocks(ownerPrivateKey, recipientPublicKey, recipientPublicKeyKeyId: null,
-                mode: BulkAccessMode.GrantOverwrite, rights: (BlockRights.Read | BlockRights.Write), progress: progress, token: token);
-        }
-
-        public void RevokeAllBlocks(RSA ownerPrivateKey, byte[] recipientKeyId, IProgress<UiProgress> progress, CancellationToken token)
-        {
-            if (recipientKeyId == null || recipientKeyId.Length == 0)
-                throw new ArgumentException("recipientKeyId is required.", nameof(recipientKeyId));
-
-            BulkSetAccessAllBlocks(ownerPrivateKey, recipientPublicKey: null, recipientPublicKeyKeyId: recipientKeyId,
-                mode: BulkAccessMode.Revoke, rights: BlockRights.None, progress: progress, token: token);
-        }
-
-        // ------------------ internal bulk engine (O(n)) ------------------
-
-        private enum BulkAccessMode
-        {
-            GrantReadIfMissing, // only add if recipient has no slot with Read already
-            GrantOverwrite,     // overwrite slot to exact rights
-            Revoke              // remove slot
-        }
-
-        private void BulkSetAccessAllBlocks(
-            RSA ownerPrivateKey,
-            RSA? recipientPublicKey,
-            byte[]? recipientPublicKeyKeyId,
-            BulkAccessMode mode,
-            BlockRights rights,
-            IProgress<UiProgress> progress,
-            CancellationToken token)
-        {
-            if (Version != V4)
-                throw new InvalidOperationException("Bulk access operations require V4.");
-
-            EnsureKey();
-            EnsureOwnerPrivateKeyMatches(ownerPrivateKey);
-
-            int n = _blocks.Count;
-            if (n == 0)
-                return;
-
-            // Determine recipient KeyId
-            byte[] recipientKeyId;
-            if (recipientPublicKey != null)
-            {
-                byte[] spki = recipientPublicKey.ExportSubjectPublicKeyInfo();
-                recipientKeyId = SHA256.HashData(spki);
-            }
-            else
-            {
-                recipientKeyId = recipientPublicKeyKeyId!;
-            }
-
-            // Ensure recipient exists in header (membership), except revoke (allow revoking even if removed later)
-            if (mode != BulkAccessMode.Revoke && !_recipients.Any(r => r.KeyId.SequenceEqual(recipientKeyId)))
-                throw new InvalidOperationException("Recipient is not in container recipients. AddRecipient(...) first.");
-
-            // Phase 1: decrypt every block once (using owner slot) and capture plaintexts + BEKs
-            var titles = new string[n];
-            var bodies = new byte[n][];
-            var beks = new byte[n][];
-
-            progress.Report(new UiProgress
-            {
-                Message = "Decrypting blocks…",
-                Indeterminate = false,
-                Maximum = n,
-                Value = 0
-            });
-
-            for (int i = 0; i < n; i++)
-            {
-                token.ThrowIfCancellationRequested();
-
-                var b = _blocks[i];
-
-                // Get BEK using owner slot
-                byte[] bek = b.BlockKey ?? Array.Empty<byte>();
-                if (bek.Length != 32)
-                {
-                    var ownerSlot = b.KeySlots.FirstOrDefault(s => s.KeyId.SequenceEqual(OwnerKeyId));
-                    if (ownerSlot == null)
-                        throw new CryptographicException($"Owner KeySlot missing at block {i}.");
-
-                    if (ownerSlot.Alg != RECIPIENT_ALG_RSA_OAEP_SHA256)
-                        throw new CryptographicException("Unsupported block key algorithm.");
-
-                    bek = ownerPrivateKey.Decrypt(ownerSlot.WrappedBek, RSAEncryptionPadding.OaepSHA256);
-                    if (bek == null || bek.Length != 32)
-                        throw new CryptographicException("Invalid BEK length.");
-
-                    b.BlockKey = bek; // cache for this session
-                    b.MyRights = BlockRights.Read | BlockRights.Write; // owner, for this session
-                }
-
-                // Decrypt plaintext using CURRENT AD (prevhash + accessHash)
-                string titlePt = DecryptTitleV4OrThrow(b);
-                byte[] bodyPt = DecryptBodyV4OrThrow(b);
-
-                titles[i] = titlePt;
-                bodies[i] = bodyPt;
-                beks[i] = bek;
-
-                progress.Report(new UiProgress
-                {
-                    Message = $"Decrypting blocks… {i + 1}/{n}",
-                    Indeterminate = false,
-                    Maximum = n,
-                    Value = i + 1
-                });
-            }
-
-            // Phase 2: update slots (no re-encrypt yet)
-            progress.Report(new UiProgress
-            {
-                Message = "Updating access lists…",
-                Indeterminate = false,
-                Maximum = n,
-                Value = 0
-            });
-
-            for (int i = 0; i < n; i++)
-            {
-                token.ThrowIfCancellationRequested();
-
-                var b = _blocks[i];
-
-                if (mode == BulkAccessMode.Revoke)
-                {
-                    b.KeySlots.RemoveAll(s => s.KeyId.SequenceEqual(recipientKeyId));
-                }
-                else
-                {
-                    var existing = b.KeySlots.FirstOrDefault(s => s.KeyId.SequenceEqual(recipientKeyId));
-
-                    if (mode == BulkAccessMode.GrantReadIfMissing)
-                    {
-                        if (existing != null && (existing.Rights & BlockRights.Read) != 0)
-                        {
-                            // already has read (or read+write) -> keep as-is
-                            progress.Report(new UiProgress { Message = $"Updating access lists… {i + 1}/{n}", Maximum = n, Value = i + 1, Indeterminate = false });
-                            continue;
-                        }
-                    }
-
-                    // overwrite slot
-                    if (existing != null)
-                        b.KeySlots.Remove(existing);
-
-                    byte[] wrappedBek = recipientPublicKey!.Encrypt(beks[i], RSAEncryptionPadding.OaepSHA256);
-                    b.KeySlots.Add(new BlockKeySlot
-                    {
-                        KeyId = recipientKeyId,
-                        Rights = rights,
-                        Alg = RECIPIENT_ALG_RSA_OAEP_SHA256,
-                        WrappedBek = wrappedBek
-                    });
-                }
-
-                progress.Report(new UiProgress
-                {
-                    Message = $"Updating access lists… {i + 1}/{n}",
-                    Indeterminate = false,
-                    Maximum = n,
-                    Value = i + 1
-                });
-            }
-
-            // Phase 3: rebuild chain once (encrypt each block once)
-            progress.Report(new UiProgress
-            {
-                Message = "Rebuilding chain…",
-                Indeterminate = false,
-                Maximum = n,
-                Value = 0
-            });
-
-            // block 0 prevhash
-            _blocks[0].PrevHash = ZeroHash.ToArray();
-
-            for (int i = 0; i < n; i++)
-            {
-                token.ThrowIfCancellationRequested();
-
-                var b = _blocks[i];
-                b.Index = i;
-
-                if (i == 0)
-                    b.PrevHash = ZeroHash.ToArray();
-                else
-                    b.PrevHash = ComputeBlockHash(_blocks[i - 1]); // previous already re-encrypted
-
-                // Keep plaintext title in memory for UI
-                b.Title = titles[i];
-
-                EncryptTitleIntoV4(b, beks[i], titles[i]);
-                EncryptBodyIntoV4(b, beks[i], bodies[i]);
-
-                progress.Report(new UiProgress
-                {
-                    Message = $"Rebuilding chain… {i + 1}/{n}",
-                    Indeterminate = false,
-                    Maximum = n,
-                    Value = i + 1
-                });
-            }
-
-            // cleanup references (helps GC)
-            for (int i = 0; i < n; i++)
-            {
-                bodies[i] = Array.Empty<byte>();
-                titles[i] = string.Empty;
-                beks[i] = Array.Empty<byte>();
-            }
-        }
-
-        // Current on-disk format
-        public const byte CurrentVersion = 4;
-
-        private const byte RECIPIENT_ALG_RSA_OAEP_SHA256 = 1;
-        private const byte HEADER_SIGALG_RSA_PSS_SHA256 = 1;
-
-        // Block AEAD purpose bytes (V3/V4)
+        // Block AEAD purpose bytes
         private const byte AD_PURPOSE_TITLE = 1;
         private const byte AD_PURPOSE_BODY = 2;
 
-        // Versions
-        private const byte V2 = 2;
-        private const byte V3 = 3;
-        private const byte V4 = 4;
+        // Wrap purposes (for KeyWrap AD/info separation)
+        private const byte WRAP_PURPOSE_DEK = 10;
+        private const byte WRAP_PURPOSE_BEK = 11;
 
+        // ContainerId
+        private const int ContainerIdSize = 32;
+
+        // =========================
+        // Public properties
+        // =========================
         public byte Version { get; private set; } = CurrentVersion;
-
         public string EncodingWebName { get; private set; } = Global.CurrentEditorEncoding.WebName;
 
-        // Owner public key (SPKI) + header signature (prevents recipient list tampering)
-        public byte[] OwnerPublicKeySpki { get; private set; } = Array.Empty<byte>();
-        public byte[] OwnerKeyId => (OwnerPublicKeySpki.Length == 0) ? Array.Empty<byte>() : SHA256.HashData(OwnerPublicKeySpki);
+        // Owner keys (V6)
+        public byte[] OwnerSigningPublicKeySpki { get; private set; } = Array.Empty<byte>(); // ECDSA pub (P-384)
+        public byte[] OwnerEcdhPublicKeySpki { get; private set; } = Array.Empty<byte>();    // ECDH pub (P-384)
 
-        public byte HeaderSignatureAlg { get; private set; } = HEADER_SIGALG_RSA_PSS_SHA256;
+        // Stable container binding
+        public byte[] ContainerId { get; private set; } = Array.Empty<byte>(); // 32 bytes
+
+        // Owner identity for access control = SHA256(OwnerEcdhPublicKeySpki)
+        public byte[] OwnerKeyId => (OwnerEcdhPublicKeySpki.Length == 0) ? Array.Empty<byte>() : SHA256.HashData(OwnerEcdhPublicKeySpki);
+
+        public byte HeaderSignatureAlg { get; private set; } = HEADER_SIGALG_ECDSA_P384_SHA256;
         public byte[] HeaderSignature { get; private set; } = Array.Empty<byte>();
 
         private readonly List<RecipientEntry> _recipients = new();
@@ -286,17 +74,14 @@ namespace HSTRYDoc
         private readonly List<Block> _blocks = new();
         public IReadOnlyList<Block> Blocks => _blocks;
 
-        // Container DEK (membership key) held in memory while container is open (AES-256)
-        // - Used to decrypt V2/V3 blocks.
-        // - In V4, this key is only used to prove membership / open the container.
+        // Container DEK (32 bytes, AES-256) in memory while open
         private byte[] _key = Array.Empty<byte>();
 
-        // Active user's KeyId (SHA256(SPKI(pub-from-private)))
+        // Active user's KeyId = SHA256(ECDH SPKI derived from private key)
         private byte[] _activeKeyId = Array.Empty<byte>();
 
-        // Cached encoding for RTF bytes
+        // Cached encoding
         private Encoding? _encCache;
-
         private static readonly byte[] ZeroHash = new byte[Crypto.Sha256Size];
 
         private HSTRYContainer() { }
@@ -305,82 +90,131 @@ namespace HSTRYDoc
             => _encCache ??= Encoding.GetEncoding(EncodingWebName);
 
         // ============================================================
-        // Key files (private key as file)
+        // Key files (ECDH + ECDSA) - P-384
         // ============================================================
-        public static class RsaKeyFiles
+        public static class EcdhKeyFiles
         {
-            // Public key file contains Base64(SPKI)
-            public static void SavePublicKeySpki(string path, RSA rsa)
+            // Public key file: Base64(SPKI)
+            public static void SavePublicKeySpki(string path, ECDiffieHellman ecdh)
             {
-                byte[] spki = rsa.ExportSubjectPublicKeyInfo();
+                byte[] spki = ecdh.ExportSubjectPublicKeyInfo();
                 File.WriteAllText(path, Convert.ToBase64String(spki), Encoding.ASCII);
             }
 
-            public static RSA LoadPublicKeySpki(string path)
+            public static ECDiffieHellman LoadPublicKeySpki(string path)
             {
                 string b64 = File.ReadAllText(path, Encoding.ASCII).Trim();
                 byte[] spki = Convert.FromBase64String(b64);
 
-                var rsa = RSA.Create();
-                rsa.ImportSubjectPublicKeyInfo(spki, out _);
-                return rsa;
+                var e = ECDiffieHellman.Create();
+                e.ImportSubjectPublicKeyInfo(spki, out _);
+                return e;
             }
 
-            // Private key file contains Base64(PKCS#8)
-            public static void SavePrivateKeyPkcs8(string path, RSA rsa)
+            // Private key file: Base64(PKCS#8)
+            public static void SavePrivateKeyPkcs8(string path, ECDiffieHellman ecdh)
             {
-                byte[] pkcs8 = rsa.ExportPkcs8PrivateKey();
+                byte[] pkcs8 = ecdh.ExportPkcs8PrivateKey();
                 File.WriteAllText(path, Convert.ToBase64String(pkcs8), Encoding.ASCII);
             }
 
-            public static RSA LoadPrivateKeyPkcs8(string path)
+            public static ECDiffieHellman LoadPrivateKeyPkcs8(string path)
             {
                 string b64 = File.ReadAllText(path, Encoding.ASCII).Trim();
                 byte[] pkcs8 = Convert.FromBase64String(b64);
 
-                var rsa = RSA.Create();
-                rsa.ImportPkcs8PrivateKey(pkcs8, out _);
-                return rsa;
+                var e = ECDiffieHellman.Create();
+                e.ImportPkcs8PrivateKey(pkcs8, out _);
+                return e;
             }
 
             // KeyId = SHA256(SPKI)
-            public static byte[] ComputeKeyIdFromPublicKey(RSA rsa)
+            public static byte[] ComputeKeyIdFromPublicKey(ECDiffieHellman ecdh)
             {
-                byte[] spki = rsa.ExportSubjectPublicKeyInfo();
+                byte[] spki = ecdh.ExportSubjectPublicKeyInfo();
                 return SHA256.HashData(spki);
             }
 
-            public static RSA CreateNewKeyPair(int bits = 3072)
+            public static ECDiffieHellman CreateNewKeyPair()
             {
-                var rsa = RSA.Create();
-                rsa.KeySize = bits;
-                return rsa;
+                return ECDiffieHellman.Create(ECCurve.NamedCurves.nistP384);
+            }
+        }
+
+        public static class EcdsaKeyFiles
+        {
+            public static void SavePublicKeySpki(string path, ECDsa ecdsa)
+            {
+                byte[] spki = ecdsa.ExportSubjectPublicKeyInfo();
+                File.WriteAllText(path, Convert.ToBase64String(spki), Encoding.ASCII);
+            }
+
+            public static ECDsa LoadPublicKeySpki(string path)
+            {
+                string b64 = File.ReadAllText(path, Encoding.ASCII).Trim();
+                byte[] spki = Convert.FromBase64String(b64);
+
+                var s = ECDsa.Create();
+                s.ImportSubjectPublicKeyInfo(spki, out _);
+                return s;
+            }
+
+            public static void SavePrivateKeyPkcs8(string path, ECDsa ecdsa)
+            {
+                byte[] pkcs8 = ecdsa.ExportPkcs8PrivateKey();
+                File.WriteAllText(path, Convert.ToBase64String(pkcs8), Encoding.ASCII);
+            }
+
+            public static ECDsa LoadPrivateKeyPkcs8(string path)
+            {
+                string b64 = File.ReadAllText(path, Encoding.ASCII).Trim();
+                byte[] pkcs8 = Convert.FromBase64String(b64);
+
+                var s = ECDsa.Create();
+                s.ImportPkcs8PrivateKey(pkcs8, out _);
+                return s;
+            }
+
+            public static ECDsa CreateNewKeyPair()
+            {
+                return ECDsa.Create(ECCurve.NamedCurves.nistP384);
             }
         }
 
         // ============================================================
-        // Create / Load
+        // Create / Load (V6 only)
         // ============================================================
 
         /// <summary>
-        /// Create a new container (V4 current).
-        /// - ownerPrivateKey signs the header.
-        /// - recipients are the public keys that can open the container (should include owner).
-        /// - By default, new blocks grant Read to all recipients and Read|Write to owner.
+        /// Create a new V6 container.
+        /// Owner uses ECDSA for header signing and ECDH for membership + block BEK ownership.
+        /// Recipients are ECDH public keys (should include owner ECDH; will be ensured).
         /// </summary>
-        // =======================
-        // FIXED (complete): CreateNewForRecipients (sets _activeKeyId for new container session)
-        // Variant 1 semantics: blocks default to Owner RW, others None (handled in AddRtfDocument).
-        // =======================
         public static HSTRYContainer CreateNewForRecipients(
-            RSA ownerPrivateKey,
-            IEnumerable<RSA> recipientPublicKeys,
+            ECDsa ownerSigningPrivateKey,
+            ECDiffieHellman ownerEcdhPrivateKey,
+            IEnumerable<ECDiffieHellman> recipientEcdhPublicKeys,
             Encoding? encoding = null)
         {
-            if (ownerPrivateKey == null) throw new ArgumentNullException(nameof(ownerPrivateKey));
-            if (recipientPublicKeys == null) throw new ArgumentNullException(nameof(recipientPublicKeys));
+            if (ownerSigningPrivateKey == null) throw new ArgumentNullException(nameof(ownerSigningPrivateKey));
+            if (ownerEcdhPrivateKey == null) throw new ArgumentNullException(nameof(ownerEcdhPrivateKey));
+            if (recipientEcdhPublicKeys == null) throw new ArgumentNullException(nameof(recipientEcdhPublicKeys));
 
-            var pubs = recipientPublicKeys.ToList();
+            var pubs = recipientEcdhPublicKeys.ToList();
+
+            // Ensure owner is included as recipient (membership)
+            byte[] ownerEcdhSpki = ownerEcdhPrivateKey.ExportSubjectPublicKeyInfo();
+            byte[] ownerKid = SHA256.HashData(ownerEcdhSpki);
+
+            bool ownerAlready = pubs.Any(p =>
+            {
+                byte[] spki = p.ExportSubjectPublicKeyInfo();
+                return SHA256.HashData(spki).SequenceEqual(ownerKid);
+            });
+
+            if (!ownerAlready)
+                pubs.Insert(0, ownerEcdhPrivateKey);
+
             if (pubs.Count == 0)
                 throw new ArgumentException("At least one recipient public key is required.");
 
@@ -393,28 +227,38 @@ namespace HSTRYDoc
             c.EncodingWebName = enc.WebName;
             c._encCache = null;
 
-            c.OwnerPublicKeySpki = ownerPrivateKey.ExportSubjectPublicKeyInfo();
-            c.HeaderSignatureAlg = HEADER_SIGALG_RSA_PSS_SHA256;
+            c.OwnerSigningPublicKeySpki = ownerSigningPrivateKey.ExportSubjectPublicKeyInfo();
+            c.OwnerEcdhPublicKeySpki = ownerEcdhSpki;
 
-            // IMPORTANT: set active identity for this in-memory session (creator = owner)
-            c._activeKeyId = SHA256.HashData(c.OwnerPublicKeySpki);
+            // Stable container binding
+            c.ContainerId = new byte[ContainerIdSize];
+            RandomNumberGenerator.Fill(c.ContainerId);
 
-            // Generate container DEK (membership key, AES-256)
+            // active identity = owner
+            c._activeKeyId = ownerKid;
+
+            // DEK (32 bytes)
             c._key = new byte[32];
             RandomNumberGenerator.Fill(c._key);
 
-            // Wrap container DEK for each recipient, and store their SPKI in V4
-            foreach (var rsaPub in pubs)
+            // Recipients with wrapped DEK
+            foreach (var pub in pubs)
             {
-                byte[] spki = rsaPub.ExportSubjectPublicKeyInfo();
+                byte[] spki = pub.ExportSubjectPublicKeyInfo();
                 byte[] keyId = SHA256.HashData(spki);
-                byte[] wrappedDek = rsaPub.Encrypt(c._key, RSAEncryptionPadding.OaepSHA256);
+
+                byte[] wrappedDek = EccKeyWrap.WrapKey32(
+                    key32: c._key,
+                    recipientEcdhSpki: spki,
+                    recipientKeyId: keyId,
+                    purpose: WRAP_PURPOSE_DEK,
+                    containerId: c.ContainerId);
 
                 c._recipients.Add(new RecipientEntry
                 {
                     KeyId = keyId,
                     PublicKeySpki = spki,
-                    Alg = RECIPIENT_ALG_RSA_OAEP_SHA256,
+                    Alg = RECIPIENT_ALG_ECDH_HKDF_SHA256_AESGCM,
                     WrappedDek = wrappedDek
                 });
             }
@@ -425,24 +269,22 @@ namespace HSTRYDoc
                 throw new InvalidOperationException("Duplicate recipient keys detected (KeyId collision).");
 
             // Sign header
-            c.ResignHeader(ownerPrivateKey);
+            c.ResignHeader(ownerSigningPrivateKey);
 
             return c;
         }
 
-
-        public static HSTRYContainer LoadWithPrivateKeyFile(string containerPath, string privateKeyPath)
+        public static HSTRYContainer LoadWithPrivateKeyFile(string containerPath, string ecdhPrivateKeyPath)
         {
-            // Large buffering improves throughput for big containers
             using var fs = new FileStream(containerPath, FileMode.Open, FileAccess.Read, FileShare.Read, bufferSize: 1 << 20);
             using var bs = new BufferedStream(fs, 1 << 20);
-            using var rsaPriv = RsaKeyFiles.LoadPrivateKeyPkcs8(privateKeyPath);
-            return LoadWithPrivateKey(bs, rsaPriv);
+            using var ecdhPriv = EcdhKeyFiles.LoadPrivateKeyPkcs8(ecdhPrivateKeyPath);
+            return LoadWithPrivateKey(bs, ecdhPriv);
         }
 
-        public static HSTRYContainer LoadWithPrivateKey(Stream stream, RSA privateKey)
+        public static HSTRYContainer LoadWithPrivateKey(Stream stream, ECDiffieHellman myEcdhPrivateKey)
         {
-            if (privateKey == null) throw new ArgumentNullException(nameof(privateKey));
+            if (myEcdhPrivateKey == null) throw new ArgumentNullException(nameof(myEcdhPrivateKey));
 
             using var br = new BinaryReader(stream, Encoding.UTF8, leaveOpen: true);
 
@@ -451,18 +293,25 @@ namespace HSTRYDoc
                 throw new InvalidDataException("Invalid file format (magic mismatch).");
 
             byte version = br.ReadByte();
-            if (version != V2 && version != V3 && version != V4)
+            if (version != V6)
                 throw new InvalidDataException($"Unsupported container version: {version}.");
 
             var c = new HSTRYContainer { Version = version };
 
-            // ----- Header (unsigned parts first) -----
             int encNameLen = br.ReadByte();
             c.EncodingWebName = Encoding.UTF8.GetString(br.ReadBytes(encNameLen));
             c._encCache = null;
 
-            ushort ownerPubLen = br.ReadUInt16();
-            c.OwnerPublicKeySpki = br.ReadBytes(ownerPubLen);
+            ushort ownerSignLen = br.ReadUInt16();
+            c.OwnerSigningPublicKeySpki = br.ReadBytes(ownerSignLen);
+
+            ushort ownerEcdhLen = br.ReadUInt16();
+            c.OwnerEcdhPublicKeySpki = br.ReadBytes(ownerEcdhLen);
+
+            // ContainerId (32 bytes)
+            c.ContainerId = br.ReadBytes(ContainerIdSize);
+            if (c.ContainerId.Length != ContainerIdSize)
+                throw new InvalidDataException("ContainerId missing/invalid.");
 
             int recipientCount = br.ReadInt32();
             if (recipientCount <= 0)
@@ -473,18 +322,13 @@ namespace HSTRYDoc
                 int keyIdLen = br.ReadByte();
                 byte[] keyId = br.ReadBytes(keyIdLen);
 
-                byte[] spki = Array.Empty<byte>();
-                if (version == V4)
-                {
-                    ushort spkiLen = br.ReadUInt16();
-                    if (spkiLen == 0) throw new InvalidDataException("Recipient SPKI missing (V4).");
-                    spki = br.ReadBytes(spkiLen);
+                ushort spkiLen = br.ReadUInt16();
+                if (spkiLen == 0) throw new InvalidDataException("Recipient SPKI missing (V6).");
+                byte[] spki = br.ReadBytes(spkiLen);
 
-                    // Sanity check KeyId matches SPKI
-                    byte[] check = SHA256.HashData(spki);
-                    if (!check.SequenceEqual(keyId))
-                        throw new InvalidDataException("Recipient KeyId does not match SPKI (V4).");
-                }
+                byte[] check = SHA256.HashData(spki);
+                if (!check.SequenceEqual(keyId))
+                    throw new InvalidDataException("Recipient KeyId does not match SPKI (V6).");
 
                 byte alg = br.ReadByte();
 
@@ -504,158 +348,104 @@ namespace HSTRYDoc
             ushort sigLen = br.ReadUInt16();
             c.HeaderSignature = br.ReadBytes(sigLen);
 
-            // Verify signature FIRST (prevents recipient/header tampering)
+            // Verify signature first (prevents tampering)
             c.VerifyHeaderSignatureOrThrow();
 
-            // Active KeyId derived from this private key
-            c._activeKeyId = RsaKeyFiles.ComputeKeyIdFromPublicKey(privateKey);
+            // Active KeyId from provided ECDH private key
+            c._activeKeyId = EcdhKeyFiles.ComputeKeyIdFromPublicKey(myEcdhPrivateKey);
 
-            // Find matching recipient by KeyId
             var entry = c._recipients.FirstOrDefault(r => r.KeyId.SequenceEqual(c._activeKeyId));
             if (entry == null)
                 throw new CryptographicException("No matching recipient entry for this private key.");
 
-            if (entry.Alg != RECIPIENT_ALG_RSA_OAEP_SHA256)
+            if (entry.Alg != RECIPIENT_ALG_ECDH_HKDF_SHA256_AESGCM)
                 throw new CryptographicException("Unsupported recipient key algorithm.");
 
-            // Unwrap container DEK (membership key)
-            byte[] dek;
-            try
-            {
-                dek = privateKey.Decrypt(entry.WrappedDek, RSAEncryptionPadding.OaepSHA256);
-            }
-            catch
-            {
-                throw new CryptographicException("Failed to decrypt container key with the provided private key.");
-            }
+            // Unwrap DEK
+            c._key = EccKeyWrap.UnwrapKey32(
+                myPrivateEcdh: myEcdhPrivateKey,
+                envelope: entry.WrappedDek,
+                myKeyId: c._activeKeyId,
+                purpose: WRAP_PURPOSE_DEK,
+                containerId: c.ContainerId);
 
-            if (dek == null || dek.Length != 32)
-                throw new CryptographicException("Invalid container key length.");
-
-            c._key = dek;
-
-            // ----- Blocks -----
+            // Blocks
             int blockCount = br.ReadInt32();
             for (int i = 0; i < blockCount; i++)
             {
-                var b = new Block
+                var b = new Block { Index = br.ReadInt32() };
+
+                b.CreatedUtc = new DateTimeOffset(br.ReadInt64(), TimeSpan.Zero);
+                b.ModifiedUtc = new DateTimeOffset(br.ReadInt64(), TimeSpan.Zero);
+
+                b.PrevHash = br.ReadBytes(Crypto.Sha256Size);
+
+                int slotCount = br.ReadInt32();
+                if (slotCount < 0) throw new InvalidDataException("Invalid KeySlot count (V6).");
+
+                for (int s = 0; s < slotCount; s++)
                 {
-                    Index = br.ReadInt32()
-                };
+                    int kidLen = br.ReadByte();
+                    byte[] kid = br.ReadBytes(kidLen);
 
-                if (version == V2)
-                {
-                    // V2: plaintext title
-                    ushort titleLen = br.ReadUInt16();
-                    b.Title = Encoding.UTF8.GetString(br.ReadBytes(titleLen));
+                    var rights = (BlockRights)br.ReadByte();
+                    byte alg = br.ReadByte();
 
-                    b.CreatedUtc = new DateTimeOffset(br.ReadInt64(), TimeSpan.Zero);
-                    b.ModifiedUtc = new DateTimeOffset(br.ReadInt64(), TimeSpan.Zero);
+                    ushort wlen = br.ReadUInt16();
+                    byte[] wrappedBek = br.ReadBytes(wlen);
 
-                    b.PrevHash = br.ReadBytes(Crypto.Sha256Size);
-
-                    b.Nonce = br.ReadBytes(Crypto.AesGcmNonceSize);
-                    b.Tag = br.ReadBytes(Crypto.AesGcmTagSize);
-
-                    int ctLen = br.ReadInt32();
-                    b.Ciphertext = br.ReadBytes(ctLen);
-                }
-                else if (version == V3)
-                {
-                    // V3: encrypted title + encrypted body with container DEK
-                    b.CreatedUtc = new DateTimeOffset(br.ReadInt64(), TimeSpan.Zero);
-                    b.ModifiedUtc = new DateTimeOffset(br.ReadInt64(), TimeSpan.Zero);
-
-                    b.PrevHash = br.ReadBytes(Crypto.Sha256Size);
-
-                    // Title payload
-                    b.TitleNonce = br.ReadBytes(Crypto.AesGcmNonceSize);
-                    b.TitleTag = br.ReadBytes(Crypto.AesGcmTagSize);
-
-                    int titleCtLen = br.ReadInt32();
-                    if (titleCtLen < 0) throw new InvalidDataException("Invalid title ciphertext length.");
-                    b.TitleCiphertext = br.ReadBytes(titleCtLen);
-
-                    // Body payload
-                    b.Nonce = br.ReadBytes(Crypto.AesGcmNonceSize);
-                    b.Tag = br.ReadBytes(Crypto.AesGcmTagSize);
-
-                    int ctLen = br.ReadInt32();
-                    if (ctLen < 0) throw new InvalidDataException("Invalid ciphertext length.");
-                    b.Ciphertext = br.ReadBytes(ctLen);
-
-                    // Title plaintext hydrated during Validate()
-                    b.Title = string.Empty;
-                }
-                else // V4
-                {
-                    b.CreatedUtc = new DateTimeOffset(br.ReadInt64(), TimeSpan.Zero);
-                    b.ModifiedUtc = new DateTimeOffset(br.ReadInt64(), TimeSpan.Zero);
-
-                    b.PrevHash = br.ReadBytes(Crypto.Sha256Size);
-
-                    int slotCount = br.ReadInt32();
-                    if (slotCount < 0) throw new InvalidDataException("Invalid KeySlot count (V4).");
-
-                    for (int s = 0; s < slotCount; s++)
+                    b.KeySlots.Add(new BlockKeySlot
                     {
-                        int kidLen = br.ReadByte();
-                        byte[] kid = br.ReadBytes(kidLen);
-
-                        var rights = (BlockRights)br.ReadByte();
-                        byte alg = br.ReadByte();
-
-                        ushort wlen = br.ReadUInt16();
-                        byte[] wrappedBek = br.ReadBytes(wlen);
-
-                        b.KeySlots.Add(new BlockKeySlot
-                        {
-                            KeyId = kid,
-                            Rights = rights,
-                            Alg = alg,
-                            WrappedBek = wrappedBek
-                        });
-                    }
-
-                    // Try unwrap BEK for active user (optional)
-                    var mySlot = b.KeySlots.FirstOrDefault(x => x.KeyId.SequenceEqual(c._activeKeyId));
-                    if (mySlot != null)
-                    {
-                        if (mySlot.Alg != RECIPIENT_ALG_RSA_OAEP_SHA256)
-                            throw new CryptographicException("Unsupported block key algorithm.");
-
-                        try
-                        {
-                            byte[] bek = privateKey.Decrypt(mySlot.WrappedBek, RSAEncryptionPadding.OaepSHA256);
-                            if (bek == null || bek.Length != 32)
-                                throw new CryptographicException("Invalid BEK length.");
-                            b.BlockKey = bek;
-                            b.MyRights = mySlot.Rights;
-                        }
-                        catch
-                        {
-                            throw new CryptographicException("Failed to decrypt BEK for a block.");
-                        }
-                    }
-
-                    // Title payload
-                    b.TitleNonce = br.ReadBytes(Crypto.AesGcmNonceSize);
-                    b.TitleTag = br.ReadBytes(Crypto.AesGcmTagSize);
-
-                    int titleCtLen = br.ReadInt32();
-                    if (titleCtLen < 0) throw new InvalidDataException("Invalid title ciphertext length.");
-                    b.TitleCiphertext = br.ReadBytes(titleCtLen);
-
-                    // Body payload
-                    b.Nonce = br.ReadBytes(Crypto.AesGcmNonceSize);
-                    b.Tag = br.ReadBytes(Crypto.AesGcmTagSize);
-
-                    int ctLen = br.ReadInt32();
-                    if (ctLen < 0) throw new InvalidDataException("Invalid ciphertext length.");
-                    b.Ciphertext = br.ReadBytes(ctLen);
-
-                    b.Title = string.Empty; // hydrated for accessible blocks
+                        KeyId = kid,
+                        Rights = rights,
+                        Alg = alg,
+                        WrappedBek = wrappedBek
+                    });
                 }
+
+                // Try unwrap BEK for active user
+                var mySlot = b.KeySlots.FirstOrDefault(x => x.KeyId.SequenceEqual(c._activeKeyId));
+                if (mySlot != null)
+                {
+                    if (mySlot.Alg != RECIPIENT_ALG_ECDH_HKDF_SHA256_AESGCM)
+                        throw new CryptographicException("Unsupported block key algorithm.");
+
+                    try
+                    {
+                        byte[] bek = EccKeyWrap.UnwrapKey32(
+                            myPrivateEcdh: myEcdhPrivateKey,
+                            envelope: mySlot.WrappedBek,
+                            myKeyId: c._activeKeyId,
+                            purpose: WRAP_PURPOSE_BEK,
+                            containerId: c.ContainerId);
+
+                        if (bek.Length != 32) throw new CryptographicException("Invalid BEK length.");
+                        b.BlockKey = bek;
+                        b.MyRights = mySlot.Rights;
+                    }
+                    catch
+                    {
+                        throw new CryptographicException("Failed to decrypt BEK for a block.");
+                    }
+                }
+
+                // Title payload
+                b.TitleNonce = br.ReadBytes(Crypto.AesGcmNonceSize);
+                b.TitleTag = br.ReadBytes(Crypto.AesGcmTagSize);
+
+                int titleCtLen = br.ReadInt32();
+                if (titleCtLen < 0) throw new InvalidDataException("Invalid title ciphertext length.");
+                b.TitleCiphertext = br.ReadBytes(titleCtLen);
+
+                // Body payload
+                b.Nonce = br.ReadBytes(Crypto.AesGcmNonceSize);
+                b.Tag = br.ReadBytes(Crypto.AesGcmTagSize);
+
+                int ctLen = br.ReadInt32();
+                if (ctLen < 0) throw new InvalidDataException("Invalid ciphertext length.");
+                b.Ciphertext = br.ReadBytes(ctLen);
+
+                b.Title = string.Empty; // hydrated for accessible blocks
 
                 c._blocks.Add(b);
             }
@@ -667,11 +457,10 @@ namespace HSTRYDoc
         }
 
         // ============================================================
-        // Save
+        // Save (V6 only)
         // ============================================================
         public void Save(string path)
         {
-            // Large buffering improves throughput for big containers
             using var fs = new FileStream(path, FileMode.Create, FileAccess.Write, FileShare.None, bufferSize: 1 << 20);
             using var bs = new BufferedStream(fs, 1 << 20);
             Save(bs);
@@ -680,10 +469,6 @@ namespace HSTRYDoc
         public void Save(Stream stream)
         {
             EnsureKey();
-
-            if (Version != V4)
-                throw new InvalidOperationException("This container is not V4. Call UpgradeToV4(...) first and then Save().");
-
             EnsureHeaderSigned();
 
             using var bw = new BinaryWriter(stream, Encoding.UTF8, leaveOpen: true);
@@ -695,36 +480,40 @@ namespace HSTRYDoc
             bw.Write((byte)encBytes.Length);
             bw.Write(encBytes);
 
-            if (OwnerPublicKeySpki == null || OwnerPublicKeySpki.Length == 0)
-                throw new InvalidDataException("Owner public key is missing.");
-            if (OwnerPublicKeySpki.Length > ushort.MaxValue)
-                throw new InvalidDataException("Owner public key is too large.");
+            if (OwnerSigningPublicKeySpki.Length == 0) throw new InvalidDataException("Owner signing public key is missing.");
+            if (OwnerEcdhPublicKeySpki.Length == 0) throw new InvalidDataException("Owner ECDH public key is missing.");
 
-            bw.Write((ushort)OwnerPublicKeySpki.Length);
-            bw.Write(OwnerPublicKeySpki);
+            if (OwnerSigningPublicKeySpki.Length > ushort.MaxValue) throw new InvalidDataException("Owner signing public key is too large.");
+            if (OwnerEcdhPublicKeySpki.Length > ushort.MaxValue) throw new InvalidDataException("Owner ECDH public key is too large.");
+
+            bw.Write((ushort)OwnerSigningPublicKeySpki.Length);
+            bw.Write(OwnerSigningPublicKeySpki);
+
+            bw.Write((ushort)OwnerEcdhPublicKeySpki.Length);
+            bw.Write(OwnerEcdhPublicKeySpki);
+
+            if (ContainerId == null || ContainerId.Length != ContainerIdSize)
+                throw new InvalidDataException("ContainerId missing/invalid.");
+
+            bw.Write(ContainerId);
 
             bw.Write(_recipients.Count);
             foreach (var r in _recipients)
             {
-                if (r.KeyId == null || r.KeyId.Length == 0)
-                    throw new InvalidDataException("Recipient KeyId missing.");
-                if (r.PublicKeySpki == null || r.PublicKeySpki.Length == 0)
-                    throw new InvalidDataException("Recipient SPKI missing (V4).");
-                if (r.WrappedDek == null || r.WrappedDek.Length == 0)
-                    throw new InvalidDataException("Recipient WrappedDek missing.");
+                if (r.KeyId == null || r.KeyId.Length == 0) throw new InvalidDataException("Recipient KeyId missing.");
+                if (r.PublicKeySpki == null || r.PublicKeySpki.Length == 0) throw new InvalidDataException("Recipient SPKI missing (V6).");
+                if (r.WrappedDek == null || r.WrappedDek.Length == 0) throw new InvalidDataException("Recipient WrappedDek missing.");
 
                 bw.Write((byte)r.KeyId.Length);
                 bw.Write(r.KeyId);
 
-                if (r.PublicKeySpki.Length > ushort.MaxValue)
-                    throw new InvalidDataException("Recipient SPKI too large.");
+                if (r.PublicKeySpki.Length > ushort.MaxValue) throw new InvalidDataException("Recipient SPKI too large.");
                 bw.Write((ushort)r.PublicKeySpki.Length);
                 bw.Write(r.PublicKeySpki);
 
                 bw.Write(r.Alg);
 
-                if (r.WrappedDek.Length > ushort.MaxValue)
-                    throw new InvalidDataException("WrappedDek too large.");
+                if (r.WrappedDek.Length > ushort.MaxValue) throw new InvalidDataException("WrappedDek too large.");
                 bw.Write((ushort)r.WrappedDek.Length);
                 bw.Write(r.WrappedDek);
             }
@@ -739,10 +528,10 @@ namespace HSTRYDoc
 
             bw.Write(_blocks.Count);
             foreach (var b in _blocks)
-                WriteBlockV4(bw, b);
+                WriteBlockV6(bw, b);
         }
 
-        private static void WriteBlockV4(BinaryWriter bw, Block b)
+        private static void WriteBlockV6(BinaryWriter bw, Block b)
         {
             bw.Write(b.Index);
 
@@ -774,11 +563,11 @@ namespace HSTRYDoc
 
             // Title payload
             if (b.TitleCiphertext == null || b.TitleCiphertext.Length == 0)
-                throw new InvalidDataException("Encrypted title is missing (V4).");
+                throw new InvalidDataException("Encrypted title is missing (V6).");
             if (b.TitleNonce == null || b.TitleNonce.Length != Crypto.AesGcmNonceSize)
-                throw new InvalidDataException("Title nonce missing/invalid (V4).");
+                throw new InvalidDataException("Title nonce missing/invalid (V6).");
             if (b.TitleTag == null || b.TitleTag.Length != Crypto.AesGcmTagSize)
-                throw new InvalidDataException("Title tag missing/invalid (V4).");
+                throw new InvalidDataException("Title tag missing/invalid (V6).");
 
             bw.Write(b.TitleNonce);
             bw.Write(b.TitleTag);
@@ -793,37 +582,36 @@ namespace HSTRYDoc
         }
 
         // ============================================================
-        // Recipient management (owner-signed)
+        // Recipient management (header signed by owner ECDSA)
         // ============================================================
-
-        public void AddRecipient(RSA ownerPrivateKey, RSA recipientPublicKey)
+        public void AddRecipient(ECDsa ownerSigningPrivateKey, ECDiffieHellman recipientEcdhPublicKey)
         {
             EnsureKey();
-            EnsureOwnerPrivateKeyMatches(ownerPrivateKey);
+            EnsureOwnerSigningPrivateKeyMatches(ownerSigningPrivateKey);
 
-            byte[] spki = recipientPublicKey.ExportSubjectPublicKeyInfo();
+            byte[] spki = recipientEcdhPublicKey.ExportSubjectPublicKeyInfo();
             byte[] keyId = SHA256.HashData(spki);
 
             if (_recipients.Any(r => r.KeyId.SequenceEqual(keyId)))
                 throw new InvalidOperationException("Recipient already exists.");
 
-            byte[] wrappedDek = recipientPublicKey.Encrypt(_key, RSAEncryptionPadding.OaepSHA256);
+            byte[] wrappedDek = EccKeyWrap.WrapKey32(_key, spki, keyId, WRAP_PURPOSE_DEK, ContainerId);
 
             _recipients.Add(new RecipientEntry
             {
                 KeyId = keyId,
                 PublicKeySpki = spki,
-                Alg = RECIPIENT_ALG_RSA_OAEP_SHA256,
+                Alg = RECIPIENT_ALG_ECDH_HKDF_SHA256_AESGCM,
                 WrappedDek = wrappedDek
             });
 
-            ResignHeader(ownerPrivateKey);
+            ResignHeader(ownerSigningPrivateKey);
         }
 
-        public bool RemoveRecipientByKeyIdHex(RSA ownerPrivateKey, string keyIdHex)
+        public bool RemoveRecipientByKeyIdHex(ECDsa ownerSigningPrivateKey, string keyIdHex)
         {
             EnsureKey();
-            EnsureOwnerPrivateKeyMatches(ownerPrivateKey);
+            EnsureOwnerSigningPrivateKeyMatches(ownerSigningPrivateKey);
 
             if (string.IsNullOrWhiteSpace(keyIdHex))
                 return false;
@@ -834,73 +622,62 @@ namespace HSTRYDoc
 
             int removed = _recipients.RemoveAll(r => r.KeyId.SequenceEqual(keyId));
             if (removed > 0)
-                ResignHeader(ownerPrivateKey);
+                ResignHeader(ownerSigningPrivateKey);
 
             return removed > 0;
         }
 
         // ============================================================
-        // Block access control (V4)
+        // Block access control (V6) - owner must provide ECDH private key
         // ============================================================
-
-        public void GrantBlockAccess(RSA ownerPrivateKey, int blockIndex, RSA recipientPublicKey, BlockRights rights, bool replaceExisting = true)
+        public void GrantBlockAccess(ECDiffieHellman ownerEcdhPrivateKey, int blockIndex, ECDiffieHellman recipientEcdhPublicKey, BlockRights rights, bool replaceExisting = true)
         {
-            if (Version != V4)
-                throw new InvalidOperationException("Block access control is only available in V4.");
-
             EnsureKey();
-            EnsureOwnerPrivateKeyMatches(ownerPrivateKey);
+            EnsureOwnerEcdhPrivateKeyMatches(ownerEcdhPrivateKey);
 
             if ((uint)blockIndex >= (uint)_blocks.Count)
                 throw new ArgumentOutOfRangeException(nameof(blockIndex));
+            if (recipientEcdhPublicKey == null)
+                throw new ArgumentNullException(nameof(recipientEcdhPublicKey));
 
-            if (recipientPublicKey == null)
-                throw new ArgumentNullException(nameof(recipientPublicKey));
-
-            byte[] spki = recipientPublicKey.ExportSubjectPublicKeyInfo();
+            byte[] spki = recipientEcdhPublicKey.ExportSubjectPublicKeyInfo();
             byte[] keyId = SHA256.HashData(spki);
 
             if (!_recipients.Any(r => r.KeyId.SequenceEqual(keyId)))
                 throw new InvalidOperationException("Recipient is not in container recipients. AddRecipient(...) first.");
 
             var b = _blocks[blockIndex];
-
-            EnsureWritableFrom(blockIndex); // chain requirement
+            EnsureWritableFrom(blockIndex);
 
             if (b.BlockKey == null || b.BlockKey.Length != 32)
                 throw new UnauthorizedAccessException("No access to block key (BEK).");
 
-            // Decrypt current plaintext BEFORE changing slots (slots are part of AD in V4).
-            string titlePt = DecryptTitleV4OrThrow(b);
-            byte[] bodyPt = DecryptBodyV4OrThrow(b);
+            string titlePt = DecryptTitleV6OrThrow(b);
+            byte[] bodyPt = DecryptBodyV6OrThrow(b);
 
-            // Update slots
             if (replaceExisting)
                 b.KeySlots.RemoveAll(s => s.KeyId.SequenceEqual(keyId));
 
-            byte[] wrappedBek = recipientPublicKey.Encrypt(b.BlockKey, RSAEncryptionPadding.OaepSHA256);
+            byte[] wrappedBek = EccKeyWrap.WrapKey32(b.BlockKey, spki, keyId, WRAP_PURPOSE_BEK, ContainerId);
+
             b.KeySlots.Add(new BlockKeySlot
             {
                 KeyId = keyId,
                 Rights = rights,
-                Alg = RECIPIENT_ALG_RSA_OAEP_SHA256,
+                Alg = RECIPIENT_ALG_ECDH_HKDF_SHA256_AESGCM,
                 WrappedBek = wrappedBek
             });
 
-            // Re-encrypt this block (AD changed), then fix chain forward
-            EncryptTitleIntoV4(b, b.BlockKey, titlePt);
-            EncryptBodyIntoV4(b, b.BlockKey, bodyPt);
+            EncryptTitleIntoV6(b, b.BlockKey, titlePt);
+            EncryptBodyIntoV6(b, b.BlockKey, bodyPt);
 
-            ReencryptFromV4(blockIndex + 1);
+            ReencryptFromV6(blockIndex + 1);
         }
 
-        public void RevokeBlockAccess(RSA ownerPrivateKey, int blockIndex, string keyIdHex)
+        public void RevokeBlockAccess(ECDiffieHellman ownerEcdhPrivateKey, int blockIndex, string keyIdHex)
         {
-            if (Version != V4)
-                throw new InvalidOperationException("Block access control is only available in V4.");
-
             EnsureKey();
-            EnsureOwnerPrivateKeyMatches(ownerPrivateKey);
+            EnsureOwnerEcdhPrivateKeyMatches(ownerEcdhPrivateKey);
 
             if ((uint)blockIndex >= (uint)_blocks.Count)
                 throw new ArgumentOutOfRangeException(nameof(blockIndex));
@@ -911,132 +688,173 @@ namespace HSTRYDoc
             byte[] keyId = Convert.FromHexString(keyIdHex);
 
             var b = _blocks[blockIndex];
-
-            EnsureWritableFrom(blockIndex); // chain requirement
+            EnsureWritableFrom(blockIndex);
 
             if (b.BlockKey == null || b.BlockKey.Length != 32)
                 throw new UnauthorizedAccessException("No access to block key (BEK).");
 
-            // Decrypt current plaintext BEFORE changing slots
-            string titlePt = DecryptTitleV4OrThrow(b);
-            byte[] bodyPt = DecryptBodyV4OrThrow(b);
+            string titlePt = DecryptTitleV6OrThrow(b);
+            byte[] bodyPt = DecryptBodyV6OrThrow(b);
 
             int removed = b.KeySlots.RemoveAll(s => s.KeyId.SequenceEqual(keyId));
             if (removed == 0)
                 return;
 
-            // Re-encrypt this block (AD changed), then fix chain forward
-            EncryptTitleIntoV4(b, b.BlockKey, titlePt);
-            EncryptBodyIntoV4(b, b.BlockKey, bodyPt);
+            EncryptTitleIntoV6(b, b.BlockKey, titlePt);
+            EncryptBodyIntoV6(b, b.BlockKey, bodyPt);
 
-            ReencryptFromV4(blockIndex + 1);
+            ReencryptFromV6(blockIndex + 1);
         }
 
         // ============================================================
-        // Upgrade to V4
+        // Bulk access (V6)
         // ============================================================
+        public void GrantReadAllBlocks(ECDiffieHellman ownerEcdhPrivateKey, ECDiffieHellman recipientEcdhPublicKey, IProgress<UiProgress> progress, CancellationToken token)
+        {
+            BulkSetAccessAllBlocks(ownerEcdhPrivateKey, recipientEcdhPublicKey, recipientPublicKeyKeyId: null,
+                mode: BulkAccessMode.GrantReadIfMissing, rights: BlockRights.Read, progress: progress, token: token);
+        }
 
-        /// <summary>
-        /// Upgrades an opened V2/V3 container to V4. You must provide all existing recipients' PUBLIC KEYS,
-        /// because V2/V3 headers do not store recipients' SPKIs.
-        /// </summary>
-        public void UpgradeToV4(RSA ownerPrivateKey, IEnumerable<RSA> recipientPublicKeys, BlockRights nonOwnerDefaultRights = BlockRights.Read)
+        public void GrantWriteAllBlocks(ECDiffieHellman ownerEcdhPrivateKey, ECDiffieHellman recipientEcdhPublicKey, IProgress<UiProgress> progress, CancellationToken token)
+        {
+            BulkSetAccessAllBlocks(ownerEcdhPrivateKey, recipientEcdhPublicKey, recipientPublicKeyKeyId: null,
+                mode: BulkAccessMode.GrantOverwrite, rights: (BlockRights.Read | BlockRights.Write), progress: progress, token: token);
+        }
+
+        public void RevokeAllBlocks(ECDiffieHellman ownerEcdhPrivateKey, byte[] recipientKeyId, IProgress<UiProgress> progress, CancellationToken token)
+        {
+            if (recipientKeyId == null || recipientKeyId.Length == 0)
+                throw new ArgumentException("recipientKeyId is required.", nameof(recipientKeyId));
+
+            BulkSetAccessAllBlocks(ownerEcdhPrivateKey, recipientPublicKey: null, recipientPublicKeyKeyId: recipientKeyId,
+                mode: BulkAccessMode.Revoke, rights: BlockRights.None, progress: progress, token: token);
+        }
+
+        private enum BulkAccessMode
+        {
+            GrantReadIfMissing,
+            GrantOverwrite,
+            Revoke
+        }
+
+        private void BulkSetAccessAllBlocks(
+            ECDiffieHellman ownerEcdhPrivateKey,
+            ECDiffieHellman? recipientPublicKey,
+            byte[]? recipientPublicKeyKeyId,
+            BulkAccessMode mode,
+            BlockRights rights,
+            IProgress<UiProgress> progress,
+            CancellationToken token)
         {
             EnsureKey();
-            EnsureOwnerPrivateKeyMatches(ownerPrivateKey);
+            EnsureOwnerEcdhPrivateKeyMatches(ownerEcdhPrivateKey);
 
-            if (Version == V4)
-                return;
+            int n = _blocks.Count;
+            if (n == 0) return;
 
-            if (Version != V2 && Version != V3)
-                throw new InvalidOperationException("Only V2/V3 containers can be upgraded.");
+            byte[] recipientKeyId;
+            byte[] recipientSpki = Array.Empty<byte>();
 
-            if (recipientPublicKeys == null)
-                throw new ArgumentNullException(nameof(recipientPublicKeys));
-
-            var pubList = recipientPublicKeys.ToList();
-            if (pubList.Count == 0)
-                throw new ArgumentException("At least one recipient public key is required.");
-
-            // Map KeyId -> public key SPKI
-            var map = new Dictionary<string, byte[]>(StringComparer.OrdinalIgnoreCase);
-            foreach (var rsaPub in pubList)
+            if (recipientPublicKey != null)
             {
-                byte[] spki = rsaPub.ExportSubjectPublicKeyInfo();
-                string kid = Convert.ToHexString(SHA256.HashData(spki));
-                map[kid] = spki;
+                recipientSpki = recipientPublicKey.ExportSubjectPublicKeyInfo();
+                recipientKeyId = SHA256.HashData(recipientSpki);
+            }
+            else
+            {
+                recipientKeyId = recipientPublicKeyKeyId!;
             }
 
-            // Ensure all existing recipients are provided
-            foreach (var r in _recipients)
-            {
-                string kid = Convert.ToHexString(r.KeyId);
-                if (!map.ContainsKey(kid))
-                    throw new InvalidOperationException($"Missing public key SPKI for existing recipient {kid}.");
-            }
+            if (mode != BulkAccessMode.Revoke && !_recipients.Any(r => r.KeyId.SequenceEqual(recipientKeyId)))
+                throw new InvalidOperationException("Recipient is not in container recipients. AddRecipient(...) first.");
 
-            // Decrypt plaintexts from old format
-            var titles = new List<string>(_blocks.Count);
-            var bodies = new List<byte[]>(_blocks.Count);
+            var titles = new string[n];
+            var bodies = new byte[n][];
+            var beks = new byte[n][];
 
-            for (int i = 0; i < _blocks.Count; i++)
+            progress.Report(new UiProgress { Message = "Decrypting blocks…", Indeterminate = false, Maximum = n, Value = 0 });
+
+            for (int i = 0; i < n; i++)
             {
+                token.ThrowIfCancellationRequested();
+
                 var b = _blocks[i];
 
-                if (Version == V2)
+                byte[] bek = b.BlockKey ?? Array.Empty<byte>();
+                if (bek.Length != 32)
                 {
-                    titles.Add(b.Title);
-                    byte[] ad = BlockAuth.BuildAssociatedData(V2, b, 0);
-                    byte[] pt = Crypto.DecryptAesGcm(_key, b.Nonce, b.Ciphertext, b.Tag, ad);
-                    bodies.Add(pt);
-                }
-                else // V3
-                {
-                    // V3 title
-                    byte[] adTitle = BlockAuth.BuildAssociatedData(V3, b, AD_PURPOSE_TITLE);
-                    byte[] titlePt = Crypto.DecryptAesGcm(_key, b.TitleNonce, b.TitleCiphertext, b.TitleTag, adTitle);
-                    titles.Add(Encoding.UTF8.GetString(titlePt));
+                    var ownerSlot = b.KeySlots.FirstOrDefault(s => s.KeyId.SequenceEqual(OwnerKeyId));
+                    if (ownerSlot == null)
+                        throw new CryptographicException($"Owner KeySlot missing at block {i}.");
 
-                    // V3 body
-                    byte[] adBody = BlockAuth.BuildAssociatedData(V3, b, AD_PURPOSE_BODY);
-                    byte[] bodyPt = Crypto.DecryptAesGcm(_key, b.Nonce, b.Ciphertext, b.Tag, adBody);
-                    bodies.Add(bodyPt);
+                    if (ownerSlot.Alg != RECIPIENT_ALG_ECDH_HKDF_SHA256_AESGCM)
+                        throw new CryptographicException("Unsupported block key algorithm.");
+
+                    bek = EccKeyWrap.UnwrapKey32(ownerEcdhPrivateKey, ownerSlot.WrappedBek, OwnerKeyId, WRAP_PURPOSE_BEK, ContainerId);
+                    if (bek.Length != 32)
+                        throw new CryptographicException("Invalid BEK length.");
+
+                    b.BlockKey = bek;
+                    b.MyRights = BlockRights.Read | BlockRights.Write;
                 }
+
+                titles[i] = DecryptTitleV6OrThrow(b);
+                bodies[i] = DecryptBodyV6OrThrow(b);
+                beks[i] = bek;
+
+                progress.Report(new UiProgress { Message = $"Decrypting blocks… {i + 1}/{n}", Indeterminate = false, Maximum = n, Value = i + 1 });
             }
 
-            // Build V4 recipient list with SPKI and fresh wrapped DEK
-            var newRecipients = new List<RecipientEntry>(_recipients.Count);
+            progress.Report(new UiProgress { Message = "Updating access lists…", Indeterminate = false, Maximum = n, Value = 0 });
 
-            foreach (var old in _recipients)
+            for (int i = 0; i < n; i++)
             {
-                string kid = Convert.ToHexString(old.KeyId);
-                byte[] spki = map[kid];
+                token.ThrowIfCancellationRequested();
+                var b = _blocks[i];
 
-                using var rsaPub = RSA.Create();
-                rsaPub.ImportSubjectPublicKeyInfo(spki, out _);
-
-                byte[] wrappedDek = rsaPub.Encrypt(_key, RSAEncryptionPadding.OaepSHA256);
-
-                newRecipients.Add(new RecipientEntry
+                if (mode == BulkAccessMode.Revoke)
                 {
-                    KeyId = old.KeyId,
-                    PublicKeySpki = spki,
-                    Alg = RECIPIENT_ALG_RSA_OAEP_SHA256,
-                    WrappedDek = wrappedDek
-                });
+                    b.KeySlots.RemoveAll(s => s.KeyId.SequenceEqual(recipientKeyId));
+                }
+                else
+                {
+                    var existing = b.KeySlots.FirstOrDefault(s => s.KeyId.SequenceEqual(recipientKeyId));
+
+                    if (mode == BulkAccessMode.GrantReadIfMissing)
+                    {
+                        if (existing != null && (existing.Rights & BlockRights.Read) != 0)
+                        {
+                            progress.Report(new UiProgress { Message = $"Updating access lists… {i + 1}/{n}", Maximum = n, Value = i + 1, Indeterminate = false });
+                            continue;
+                        }
+                    }
+
+                    if (existing != null)
+                        b.KeySlots.Remove(existing);
+
+                    byte[] wrappedBek = EccKeyWrap.WrapKey32(beks[i], recipientSpki, recipientKeyId, WRAP_PURPOSE_BEK, ContainerId);
+
+                    b.KeySlots.Add(new BlockKeySlot
+                    {
+                        KeyId = recipientKeyId,
+                        Rights = rights,
+                        Alg = RECIPIENT_ALG_ECDH_HKDF_SHA256_AESGCM,
+                        WrappedBek = wrappedBek
+                    });
+                }
+
+                progress.Report(new UiProgress { Message = $"Updating access lists… {i + 1}/{n}", Indeterminate = false, Maximum = n, Value = i + 1 });
             }
 
-            _recipients.Clear();
-            _recipients.AddRange(newRecipients);
-
-            // Switch version to V4 and rebuild blocks with per-block BEKs + slots
-            Version = V4;
+            progress.Report(new UiProgress { Message = "Rebuilding chain…", Indeterminate = false, Maximum = n, Value = 0 });
 
             if (_blocks.Count > 0)
                 _blocks[0].PrevHash = ZeroHash.ToArray();
 
-            for (int i = 0; i < _blocks.Count; i++)
+            for (int i = 0; i < n; i++)
             {
+                token.ThrowIfCancellationRequested();
+
                 var b = _blocks[i];
                 b.Index = i;
 
@@ -1045,132 +863,24 @@ namespace HSTRYDoc
                 else
                     b.PrevHash = ComputeBlockHash(_blocks[i - 1]);
 
-                // New BEK for each block
-                b.BlockKey = new byte[32];
-                RandomNumberGenerator.Fill(b.BlockKey);
+                b.Title = titles[i];
 
-                // Slots: owner RW, others default
-                b.KeySlots.Clear();
-                foreach (var r in _recipients)
-                {
-                    using var rsaPub = RSA.Create();
-                    rsaPub.ImportSubjectPublicKeyInfo(r.PublicKeySpki, out _);
+                EncryptTitleIntoV6(b, beks[i], titles[i]);
+                EncryptBodyIntoV6(b, beks[i], bodies[i]);
 
-                    var rights = r.KeyId.SequenceEqual(OwnerKeyId) ? (BlockRights.Read | BlockRights.Write) : nonOwnerDefaultRights;
-
-                    byte[] wrappedBek = rsaPub.Encrypt(b.BlockKey, RSAEncryptionPadding.OaepSHA256);
-
-                    b.KeySlots.Add(new BlockKeySlot
-                    {
-                        KeyId = r.KeyId,
-                        Rights = rights,
-                        Alg = RECIPIENT_ALG_RSA_OAEP_SHA256,
-                        WrappedBek = wrappedBek
-                    });
-                }
-
-                // Encrypt title + body with BEK
-                b.Title = titles[i] ?? string.Empty;
-                EncryptTitleIntoV4(b, b.BlockKey, b.Title);
-                EncryptBodyIntoV4(b, b.BlockKey, bodies[i]);
+                progress.Report(new UiProgress { Message = $"Rebuilding chain… {i + 1}/{n}", Indeterminate = false, Maximum = n, Value = i + 1 });
             }
 
-            // Re-sign header (recipient layout changed to V4)
-            ResignHeader(ownerPrivateKey);
-
-            if (!Validate(out string err))
-                throw new InvalidDataException("Upgrade failed: " + err);
-        }
-
-        // ============================================================
-        // Header signing / verification
-        // ============================================================
-        private void EnsureHeaderSigned()
-        {
-            if (HeaderSignature == null || HeaderSignature.Length == 0)
-                throw new InvalidOperationException("Header is not signed.");
-            if (HeaderSignatureAlg != HEADER_SIGALG_RSA_PSS_SHA256)
-                throw new InvalidOperationException("Unsupported header signature algorithm.");
-        }
-
-        private void EnsureOwnerPrivateKeyMatches(RSA ownerPrivateKey)
-        {
-            if (ownerPrivateKey == null)
-                throw new ArgumentNullException(nameof(ownerPrivateKey));
-
-            byte[] spki = ownerPrivateKey.ExportSubjectPublicKeyInfo();
-            if (!spki.SequenceEqual(OwnerPublicKeySpki))
-                throw new CryptographicException("The provided owner private key does not match the container owner public key.");
-        }
-
-        private byte[] BuildHeaderSigningData()
-        {
-            using var ms = new MemoryStream();
-            using var bw = new BinaryWriter(ms, Encoding.UTF8, leaveOpen: true);
-
-            bw.Write(Version);
-
-            byte[] encBytes = Encoding.UTF8.GetBytes(EncodingWebName);
-            bw.Write((byte)encBytes.Length);
-            bw.Write(encBytes);
-
-            bw.Write((ushort)OwnerPublicKeySpki.Length);
-            bw.Write(OwnerPublicKeySpki);
-
-            bw.Write(_recipients.Count);
-            foreach (var r in _recipients)
+            for (int i = 0; i < n; i++)
             {
-                bw.Write((byte)r.KeyId.Length);
-                bw.Write(r.KeyId);
-
-                if (Version == V4)
-                {
-                    bw.Write((ushort)r.PublicKeySpki.Length);
-                    bw.Write(r.PublicKeySpki);
-                }
-
-                bw.Write(r.Alg);
-
-                bw.Write((ushort)r.WrappedDek.Length);
-                bw.Write(r.WrappedDek);
+                bodies[i] = Array.Empty<byte>();
+                titles[i] = string.Empty;
+                beks[i] = Array.Empty<byte>();
             }
-
-            bw.Flush();
-            return ms.ToArray();
-        }
-
-        private void ResignHeader(RSA ownerPrivateKey)
-        {
-            EnsureOwnerPrivateKeyMatches(ownerPrivateKey);
-
-            byte[] data = BuildHeaderSigningData();
-            HeaderSignatureAlg = HEADER_SIGALG_RSA_PSS_SHA256;
-            HeaderSignature = ownerPrivateKey.SignData(data, HashAlgorithmName.SHA256, RSASignaturePadding.Pss);
-        }
-
-        private void VerifyHeaderSignatureOrThrow()
-        {
-            if (OwnerPublicKeySpki == null || OwnerPublicKeySpki.Length == 0)
-                throw new InvalidDataException("Owner public key missing.");
-
-            if (HeaderSignature == null || HeaderSignature.Length == 0)
-                throw new InvalidDataException("Header signature missing.");
-
-            if (HeaderSignatureAlg != HEADER_SIGALG_RSA_PSS_SHA256)
-                throw new InvalidDataException("Unsupported header signature algorithm.");
-
-            using var ownerPub = RSA.Create();
-            ownerPub.ImportSubjectPublicKeyInfo(OwnerPublicKeySpki, out _);
-
-            byte[] data = BuildHeaderSigningData();
-
-            bool ok = ownerPub.VerifyData(data, HeaderSignature, HashAlgorithmName.SHA256, RSASignaturePadding.Pss);
-            if (!ok)
-                throw new InvalidDataException("Header signature invalid. The file may have been tampered with.");
         }
 
         // ============================================================
-        // Public API (blocks)
+        // Blocks API (V6)
         // ============================================================
         public long GetStoredSizeBytes()
         {
@@ -1191,23 +901,10 @@ namespace HSTRYDoc
             }
         }
 
-        /// <summary>
-        /// Adds a block. Default access:
-        /// - Owner: Read|Write
-        /// - Other recipients: Read
-        /// </summary>
-        // =======================
-        // FIXED (complete): AddRtfDocument (Variant 1: owner RW, others None)
-        // =======================
         public Block AddRtfDocument(string title, string rtf)
         {
-            if (Version != V4)
-                throw new InvalidOperationException("AddRtfDocument is only supported in V4.");
-
             EnsureKey();
 
-            // Safety: if container was created in-memory without LoadWithPrivateKey,
-            // ensure active identity is at least owner
             if (_activeKeyId == null || _activeKeyId.Length == 0)
                 _activeKeyId = OwnerKeyId;
 
@@ -1222,41 +919,34 @@ namespace HSTRYDoc
                 PrevHash = _blocks.Count == 0 ? ZeroHash.ToArray() : ComputeBlockHash(_blocks[^1])
             };
 
-            // Generate BEK
             b.BlockKey = new byte[32];
             RandomNumberGenerator.Fill(b.BlockKey);
 
-            // Variant 1: Default slots: owner Read|Write, everyone else None
             b.KeySlots.Clear();
             foreach (var r in _recipients)
             {
-                using var rsaPub = RSA.Create();
-                rsaPub.ImportSubjectPublicKeyInfo(r.PublicKeySpki, out _);
-
                 var rights = r.KeyId.SequenceEqual(OwnerKeyId)
                     ? (BlockRights.Read | BlockRights.Write)
                     : BlockRights.None;
 
-                byte[] wrappedBek = rsaPub.Encrypt(b.BlockKey, RSAEncryptionPadding.OaepSHA256);
+                byte[] wrappedBek = EccKeyWrap.WrapKey32(b.BlockKey, r.PublicKeySpki, r.KeyId, WRAP_PURPOSE_BEK, ContainerId);
 
                 b.KeySlots.Add(new BlockKeySlot
                 {
                     KeyId = r.KeyId,
                     Rights = rights,
-                    Alg = RECIPIENT_ALG_RSA_OAEP_SHA256,
+                    Alg = RECIPIENT_ALG_ECDH_HKDF_SHA256_AESGCM,
                     WrappedBek = wrappedBek
                 });
 
-                // Cache rights for active user if this is them
                 if (r.KeyId.SequenceEqual(_activeKeyId))
                     b.MyRights = rights;
             }
 
-            // Encrypt title + body with BEK
-            EncryptTitleIntoV4(b, b.BlockKey, title);
+            EncryptTitleIntoV6(b, b.BlockKey, title);
 
             byte[] plaintext = GetContainerEncoding().GetBytes(rtf ?? string.Empty);
-            EncryptBodyIntoV4(b, b.BlockKey, plaintext);
+            EncryptBodyIntoV6(b, b.BlockKey, plaintext);
 
             _blocks.Add(b);
             return b;
@@ -1267,52 +957,34 @@ namespace HSTRYDoc
             EnsureKey();
             var b = GetBlock(index);
 
-            if (Version == V2 || Version == V3)
-            {
-                byte[] ad = BlockAuth.BuildAssociatedData(Version, b, (Version == V2) ? (byte)0 : AD_PURPOSE_BODY);
-                byte[] pt = Crypto.DecryptAesGcm(_key, b.Nonce, b.Ciphertext, b.Tag, ad);
-                return GetContainerEncoding().GetString(pt);
-            }
-
-            // V4
             if ((b.MyRights & BlockRights.Read) == 0 || b.BlockKey == null)
                 throw new UnauthorizedAccessException("No read access to this block.");
 
-            byte[] adBody = BlockAuth.BuildAssociatedData(V4, b, AD_PURPOSE_BODY);
+            byte[] adBody = BlockAuth.BuildAssociatedData(V6, b, AD_PURPOSE_BODY);
             byte[] bodyPt = Crypto.DecryptAesGcm(b.BlockKey, b.Nonce, b.Ciphertext, b.Tag, adBody);
             return GetContainerEncoding().GetString(bodyPt);
         }
 
-        // =======================
-        // FIXED (complete): UpdateRtfDocument (V4) – correct AD order + rollback on failure
-        // =======================
         public void UpdateRtfDocument(int index, string newRtf)
         {
             EnsureKey();
             var b = GetBlock(index);
 
-            if (Version != V4)
-                throw new InvalidOperationException("UpdateRtfDocument is only supported in V4.");
-
-            // Chain requirement: write access to this + all subsequent blocks
             EnsureWritableFrom(index);
 
             if (b.BlockKey == null)
                 throw new UnauthorizedAccessException("No access to this block.");
 
-            // IMPORTANT: decrypt using OLD AD first (before changing ModifiedUtc)
             DateTimeOffset oldModified = b.ModifiedUtc;
 
             string oldTitle;
             try
             {
-                oldTitle = DecryptTitleV4OrThrow(b); // uses current (old) ModifiedUtc
-                                                     // Optional sanity check (can be removed for speed):
-                _ = DecryptBodyV4OrThrow(b);
+                oldTitle = DecryptTitleV6OrThrow(b);
+                _ = DecryptBodyV6OrThrow(b);
             }
             catch
             {
-                // do not mutate anything if decrypt fails
                 throw;
             }
 
@@ -1320,19 +992,15 @@ namespace HSTRYDoc
             {
                 b.ModifiedUtc = DateTimeOffset.UtcNow;
 
-                // Re-encrypt title because ModifiedUtc is in AD
-                EncryptTitleIntoV4(b, b.BlockKey, oldTitle);
+                EncryptTitleIntoV6(b, b.BlockKey, oldTitle);
 
-                // Encrypt new body
                 byte[] pt = GetContainerEncoding().GetBytes(newRtf ?? string.Empty);
-                EncryptBodyIntoV4(b, b.BlockKey, pt);
+                EncryptBodyIntoV6(b, b.BlockKey, pt);
 
-                // Fix chain forward
-                ReencryptFromV4(index + 1);
+                ReencryptFromV6(index + 1);
             }
             catch
             {
-                // Roll back ModifiedUtc if anything fails (prevents corruption)
                 b.ModifiedUtc = oldModified;
                 throw;
             }
@@ -1342,36 +1010,27 @@ namespace HSTRYDoc
         {
             EnsureKey();
 
-            if (Version != V4)
-                throw new InvalidOperationException("RemoveBlock is only supported in V4.");
-
             if ((uint)index >= (uint)_blocks.Count)
                 throw new ArgumentOutOfRangeException(nameof(index));
 
-            EnsureWritableFrom(index); // chain requirement (renumber + prevhash updates)
+            EnsureWritableFrom(index);
 
             _blocks.RemoveAt(index);
 
             if (_blocks.Count == 0)
                 return;
 
-            // Renumber
             for (int i = index; i < _blocks.Count; i++)
                 _blocks[i].Index = i;
 
-            // Fix block 0 prevhash
             _blocks[0].PrevHash = ZeroHash.ToArray();
 
-            // Re-encrypt from index (chain must be rebuilt due to index and prevhash changes)
-            ReencryptFromV4(index);
+            ReencryptFromV6(index);
         }
 
         public void RenameBlock(int index, string newTitle)
         {
             EnsureKey();
-
-            if (Version != V4)
-                throw new InvalidOperationException("RenameBlock is only supported in V4.");
 
             if (string.IsNullOrWhiteSpace(newTitle))
                 throw new ArgumentException("Title must not be empty.");
@@ -1380,67 +1039,140 @@ namespace HSTRYDoc
                 throw new InvalidOperationException("A block with the same title already exists.");
 
             var b = GetBlock(index);
-
             EnsureWritableFrom(index);
 
             if (b.BlockKey == null)
                 throw new UnauthorizedAccessException("No access to this block.");
 
-            // Decrypt body first (ModifiedUtc changes => AD changes)
-            byte[] oldAdBody = BlockAuth.BuildAssociatedData(V4, b, AD_PURPOSE_BODY);
+            byte[] oldAdBody = BlockAuth.BuildAssociatedData(V6, b, AD_PURPOSE_BODY);
             byte[] bodyPt = Crypto.DecryptAesGcm(b.BlockKey, b.Nonce, b.Ciphertext, b.Tag, oldAdBody);
 
             b.Title = newTitle;
             b.ModifiedUtc = DateTimeOffset.UtcNow;
 
-            EncryptTitleIntoV4(b, b.BlockKey, b.Title);
-            EncryptBodyIntoV4(b, b.BlockKey, bodyPt);
+            EncryptTitleIntoV6(b, b.BlockKey, b.Title);
+            EncryptBodyIntoV6(b, b.BlockKey, bodyPt);
 
-            ReencryptFromV4(index + 1);
+            ReencryptFromV6(index + 1);
         }
 
-        public void TransferOwnership(RSA currentOwnerPrivateKey, RSA newOwnerPrivateKey, bool ensureNewOwnerIsRecipient = true)
+        // ============================================================
+        // Ownership transfer (V6) - FIXED old owner slot removal
+        // ============================================================
+        public void TransferOwnership(
+            ECDsa currentOwnerSigningPrivateKey,
+            ECDiffieHellman currentOwnerEcdhPrivateKey,
+            ECDsa newOwnerSigningPrivateKey,
+            ECDiffieHellman newOwnerEcdhPrivateKey,
+            IProgress<UiProgress>? progress = null,
+            CancellationToken token = default)
         {
             EnsureKey();
-            EnsureOwnerPrivateKeyMatches(currentOwnerPrivateKey);
+            EnsureOwnerSigningPrivateKeyMatches(currentOwnerSigningPrivateKey);
+            EnsureOwnerEcdhPrivateKeyMatches(currentOwnerEcdhPrivateKey);
 
-            if (newOwnerPrivateKey == null)
-                throw new ArgumentNullException(nameof(newOwnerPrivateKey));
+            byte[] oldOwnerKid = SHA256.HashData(OwnerEcdhPublicKeySpki);
 
-            if (Version != V4)
-                throw new InvalidOperationException("TransferOwnership is only supported in V4.");
+            byte[] newOwnerSignSpki = newOwnerSigningPrivateKey.ExportSubjectPublicKeyInfo();
+            byte[] newOwnerEcdhSpki = newOwnerEcdhPrivateKey.ExportSubjectPublicKeyInfo();
+            byte[] newOwnerKid = SHA256.HashData(newOwnerEcdhSpki);
 
-            // Ensure the new owner can open the container
-            if (ensureNewOwnerIsRecipient)
+            if (!_recipients.Any(r => r.KeyId.SequenceEqual(newOwnerKid)))
             {
-                using var newOwnerPub = RSA.Create();
-                newOwnerPub.ImportSubjectPublicKeyInfo(newOwnerPrivateKey.ExportSubjectPublicKeyInfo(), out _);
-
-                byte[] newSpki = newOwnerPub.ExportSubjectPublicKeyInfo();
-                byte[] newKeyId = SHA256.HashData(newSpki);
-
-                if (!_recipients.Any(r => r.KeyId.SequenceEqual(newKeyId)))
+                byte[] wrappedDek = EccKeyWrap.WrapKey32(_key, newOwnerEcdhSpki, newOwnerKid, WRAP_PURPOSE_DEK, ContainerId);
+                _recipients.Add(new RecipientEntry
                 {
-                    byte[] wrappedDek = newOwnerPub.Encrypt(_key, RSAEncryptionPadding.OaepSHA256);
-                    _recipients.Add(new RecipientEntry
-                    {
-                        KeyId = newKeyId,
-                        PublicKeySpki = newSpki,
-                        Alg = RECIPIENT_ALG_RSA_OAEP_SHA256,
-                        WrappedDek = wrappedDek
-                    });
-                }
+                    KeyId = newOwnerKid,
+                    PublicKeySpki = newOwnerEcdhSpki,
+                    Alg = RECIPIENT_ALG_ECDH_HKDF_SHA256_AESGCM,
+                    WrappedDek = wrappedDek
+                });
             }
 
-            // Update owner public key and re-sign header with new owner's private key
-            OwnerPublicKeySpki = newOwnerPrivateKey.ExportSubjectPublicKeyInfo();
-            ResignHeader(newOwnerPrivateKey);
+            EnsureWritableFrom(0);
+
+            int n = _blocks.Count;
+            progress?.Report(new UiProgress { Message = "Transferring ownership…", Indeterminate = false, Maximum = n, Value = 0 });
+
+            var titles = new string[n];
+            var bodies = new byte[n][];
+            var beks = new byte[n][];
+
+            for (int i = 0; i < n; i++)
+            {
+                token.ThrowIfCancellationRequested();
+
+                var b = _blocks[i];
+
+                if (b.BlockKey == null || b.BlockKey.Length != 32)
+                {
+                    var ownerSlot = b.KeySlots.FirstOrDefault(s => s.KeyId.SequenceEqual(oldOwnerKid));
+                    if (ownerSlot == null)
+                        throw new CryptographicException($"Owner KeySlot missing at block {i}.");
+
+                    b.BlockKey = EccKeyWrap.UnwrapKey32(currentOwnerEcdhPrivateKey, ownerSlot.WrappedBek, oldOwnerKid, WRAP_PURPOSE_BEK, ContainerId);
+                    b.MyRights = BlockRights.Read | BlockRights.Write;
+                }
+
+                titles[i] = DecryptTitleV6OrThrow(b);
+                bodies[i] = DecryptBodyV6OrThrow(b);
+                beks[i] = b.BlockKey;
+
+                progress?.Report(new UiProgress { Message = $"Transferring ownership… {i + 1}/{n}", Indeterminate = false, Maximum = n, Value = i + 1 });
+            }
+
+            // Update header owner keys
+            OwnerSigningPublicKeySpki = newOwnerSignSpki;
+            OwnerEcdhPublicKeySpki = newOwnerEcdhSpki;
+
+            // Update slots in all blocks: remove old owner slot, ensure new owner slot
+            for (int i = 0; i < n; i++)
+            {
+                token.ThrowIfCancellationRequested();
+                var b = _blocks[i];
+
+                b.KeySlots.RemoveAll(s => s.KeyId.SequenceEqual(oldOwnerKid));
+                b.KeySlots.RemoveAll(s => s.KeyId.SequenceEqual(newOwnerKid)); // avoid duplicates
+
+                byte[] wrappedBek = EccKeyWrap.WrapKey32(beks[i], newOwnerEcdhSpki, newOwnerKid, WRAP_PURPOSE_BEK, ContainerId);
+                b.KeySlots.Add(new BlockKeySlot
+                {
+                    KeyId = newOwnerKid,
+                    Rights = BlockRights.Read | BlockRights.Write,
+                    Alg = RECIPIENT_ALG_ECDH_HKDF_SHA256_AESGCM,
+                    WrappedBek = wrappedBek
+                });
+            }
+
+            // resign header with NEW owner's signing key
+            ResignHeader(newOwnerSigningPrivateKey);
+
+            // rebuild chain (accessHash changed -> AD changed -> re-encrypt all)
+            if (n > 0)
+                _blocks[0].PrevHash = ZeroHash.ToArray();
+
+            for (int i = 0; i < n; i++)
+            {
+                token.ThrowIfCancellationRequested();
+
+                var b = _blocks[i];
+                b.Index = i;
+
+                if (i == 0) b.PrevHash = ZeroHash.ToArray();
+                else b.PrevHash = ComputeBlockHash(_blocks[i - 1]);
+
+                b.Title = titles[i];
+
+                EncryptTitleIntoV6(b, beks[i], titles[i]);
+                EncryptBodyIntoV6(b, beks[i], bodies[i]);
+            }
+
+            _activeKeyId = newOwnerKid;
         }
 
         // ============================================================
         // Hash / Validate
         // ============================================================
-
         public byte[] ComputeBlockHash(Block b)
         {
             Span<byte> b1 = stackalloc byte[1];
@@ -1463,35 +1195,18 @@ namespace HSTRYDoc
 
             ih.AppendData(b.PrevHash);
 
-            if (Version == V2)
-            {
-                byte[] titleBytes = Encoding.UTF8.GetBytes(b.Title ?? string.Empty);
-                Span<byte> u2 = stackalloc byte[2];
-                BinaryPrimitives.WriteUInt16LittleEndian(u2, (ushort)titleBytes.Length);
-                ih.AppendData(u2);
-                ih.AppendData(titleBytes);
-            }
-            else
-            {
-                // V3/V4 title payload
-                Span<byte> tlen = stackalloc byte[4];
-                BinaryPrimitives.WriteInt32LittleEndian(tlen, b.TitleCiphertext?.Length ?? 0);
+            Span<byte> tlen = stackalloc byte[4];
+            BinaryPrimitives.WriteInt32LittleEndian(tlen, b.TitleCiphertext?.Length ?? 0);
 
-                ih.AppendData(b.TitleNonce);
-                ih.AppendData(b.TitleTag);
-                ih.AppendData(tlen);
-                if (b.TitleCiphertext != null && b.TitleCiphertext.Length > 0)
-                    ih.AppendData(b.TitleCiphertext);
-            }
+            ih.AppendData(b.TitleNonce);
+            ih.AppendData(b.TitleTag);
+            ih.AppendData(tlen);
+            if (b.TitleCiphertext != null && b.TitleCiphertext.Length > 0)
+                ih.AppendData(b.TitleCiphertext);
 
-            if (Version == V4)
-            {
-                // Bind access control metadata into block hash
-                byte[] accessHash = BlockAuth.ComputeAccessHashV4(b);
-                ih.AppendData(accessHash);
-            }
+            byte[] accessHash = BlockAuth.ComputeAccessHashV4(b);
+            ih.AppendData(accessHash);
 
-            // Body payload
             Span<byte> clen = stackalloc byte[4];
             BinaryPrimitives.WriteInt32LittleEndian(clen, b.Ciphertext?.Length ?? 0);
 
@@ -1513,7 +1228,6 @@ namespace HSTRYDoc
             if (_blocks.Count == 0)
                 return true;
 
-            // block 0 checks
             if (_blocks[0].Index != 0)
             {
                 error = "Index mismatch at block 0.";
@@ -1526,7 +1240,6 @@ namespace HSTRYDoc
                 return false;
             }
 
-            // Validate block 0 (if accessible)
             if (!ValidateAndHydrateBlock(_blocks[0], out error))
                 return false;
 
@@ -1563,38 +1276,18 @@ namespace HSTRYDoc
 
             try
             {
-                if (Version == V2)
-                {
-                    byte[] ad = BlockAuth.BuildAssociatedData(V2, b, 0);
-                    _ = Crypto.DecryptAesGcm(_key, b.Nonce, b.Ciphertext, b.Tag, ad);
-                    return true;
-                }
-
-                if (Version == V3)
-                {
-                    byte[] adTitle = BlockAuth.BuildAssociatedData(V3, b, AD_PURPOSE_TITLE);
-                    byte[] titlePt = Crypto.DecryptAesGcm(_key, b.TitleNonce, b.TitleCiphertext, b.TitleTag, adTitle);
-                    b.Title = Encoding.UTF8.GetString(titlePt);
-
-                    byte[] adBody = BlockAuth.BuildAssociatedData(V3, b, AD_PURPOSE_BODY);
-                    _ = Crypto.DecryptAesGcm(_key, b.Nonce, b.Ciphertext, b.Tag, adBody);
-
-                    return true;
-                }
-
-                // V4: only validate/hydrate if we have BEK
                 if (b.BlockKey == null || (b.MyRights & BlockRights.Read) == 0)
                 {
                     b.Title = "<restricted>";
                     return true;
                 }
 
-                byte[] adTitleV4 = BlockAuth.BuildAssociatedData(V4, b, AD_PURPOSE_TITLE);
-                byte[] titlePtV4 = Crypto.DecryptAesGcm(b.BlockKey, b.TitleNonce, b.TitleCiphertext, b.TitleTag, adTitleV4);
-                b.Title = Encoding.UTF8.GetString(titlePtV4);
+                byte[] adTitle = BlockAuth.BuildAssociatedData(V6, b, AD_PURPOSE_TITLE);
+                byte[] titlePt = Crypto.DecryptAesGcm(b.BlockKey, b.TitleNonce, b.TitleCiphertext, b.TitleTag, adTitle);
+                b.Title = Encoding.UTF8.GetString(titlePt);
 
-                byte[] adBodyV4 = BlockAuth.BuildAssociatedData(V4, b, AD_PURPOSE_BODY);
-                _ = Crypto.DecryptAesGcm(b.BlockKey, b.Nonce, b.Ciphertext, b.Tag, adBodyV4);
+                byte[] adBody = BlockAuth.BuildAssociatedData(V6, b, AD_PURPOSE_BODY);
+                _ = Crypto.DecryptAesGcm(b.BlockKey, b.Nonce, b.Ciphertext, b.Tag, adBody);
 
                 return true;
             }
@@ -1606,14 +1299,10 @@ namespace HSTRYDoc
         }
 
         // ============================================================
-        // Internal chain + crypto (V4)
+        // Internal chain + crypto (V6)
         // ============================================================
-
         private void EnsureWritableFrom(int startIndex)
         {
-            if (Version != V4)
-                return;
-
             if (_blocks.Count == 0) return;
             if (startIndex < 0) startIndex = 0;
             if (startIndex >= _blocks.Count) return;
@@ -1626,7 +1315,7 @@ namespace HSTRYDoc
             }
         }
 
-        private void ReencryptFromV4(int startIndex)
+        private void ReencryptFromV6(int startIndex)
         {
             if (_blocks.Count == 0) return;
 
@@ -1635,7 +1324,6 @@ namespace HSTRYDoc
 
             EnsureWritableFrom(startIndex);
 
-            // rolling hash of previous block (already consistent)
             byte[] prevHash = ComputeBlockHash(_blocks[startIndex - 1]);
 
             for (int i = startIndex; i < _blocks.Count; i++)
@@ -1645,45 +1333,41 @@ namespace HSTRYDoc
                 if (cur.BlockKey == null)
                     throw new UnauthorizedAccessException("No access to block key (BEK).");
 
-                // decrypt current plaintexts using OLD AD
-                string titlePt = DecryptTitleV4OrThrow(cur);
-                byte[] bodyPt = DecryptBodyV4OrThrow(cur);
+                string titlePt = DecryptTitleV6OrThrow(cur);
+                byte[] bodyPt = DecryptBodyV6OrThrow(cur);
 
-                // update PrevHash
                 cur.PrevHash = prevHash;
 
-                // re-encrypt title/body with SAME BEK but NEW AD (PrevHash in AD)
-                EncryptTitleIntoV4(cur, cur.BlockKey, titlePt);
-                EncryptBodyIntoV4(cur, cur.BlockKey, bodyPt);
+                EncryptTitleIntoV6(cur, cur.BlockKey, titlePt);
+                EncryptBodyIntoV6(cur, cur.BlockKey, bodyPt);
 
-                // update rolling prevHash for next block
                 prevHash = ComputeBlockHash(cur);
             }
         }
 
-        private string DecryptTitleV4OrThrow(Block b)
+        private string DecryptTitleV6OrThrow(Block b)
         {
             if (b.BlockKey == null)
                 throw new UnauthorizedAccessException("No access to block key (BEK).");
 
-            byte[] adTitle = BlockAuth.BuildAssociatedData(V4, b, AD_PURPOSE_TITLE);
+            byte[] adTitle = BlockAuth.BuildAssociatedData(V6, b, AD_PURPOSE_TITLE);
             byte[] titlePt = Crypto.DecryptAesGcm(b.BlockKey, b.TitleNonce, b.TitleCiphertext, b.TitleTag, adTitle);
             return Encoding.UTF8.GetString(titlePt);
         }
 
-        private byte[] DecryptBodyV4OrThrow(Block b)
+        private byte[] DecryptBodyV6OrThrow(Block b)
         {
             if (b.BlockKey == null)
                 throw new UnauthorizedAccessException("No access to block key (BEK).");
 
-            byte[] adBody = BlockAuth.BuildAssociatedData(V4, b, AD_PURPOSE_BODY);
+            byte[] adBody = BlockAuth.BuildAssociatedData(V6, b, AD_PURPOSE_BODY);
             return Crypto.DecryptAesGcm(b.BlockKey, b.Nonce, b.Ciphertext, b.Tag, adBody);
         }
 
-        private void EncryptTitleIntoV4(Block b, byte[] bek, string title)
+        private void EncryptTitleIntoV6(Block b, byte[] bek, string title)
         {
             byte[] titleBytes = Encoding.UTF8.GetBytes(title ?? string.Empty);
-            byte[] ad = BlockAuth.BuildAssociatedData(V4, b, AD_PURPOSE_TITLE);
+            byte[] ad = BlockAuth.BuildAssociatedData(V6, b, AD_PURPOSE_TITLE);
             var (nonce, ct, tag) = Crypto.EncryptAesGcm(bek, titleBytes, ad);
 
             b.TitleNonce = nonce;
@@ -1691,9 +1375,9 @@ namespace HSTRYDoc
             b.TitleTag = tag;
         }
 
-        private void EncryptBodyIntoV4(Block b, byte[] bek, byte[] plaintext)
+        private void EncryptBodyIntoV6(Block b, byte[] bek, byte[] plaintext)
         {
-            byte[] ad = BlockAuth.BuildAssociatedData(V4, b, AD_PURPOSE_BODY);
+            byte[] ad = BlockAuth.BuildAssociatedData(V6, b, AD_PURPOSE_BODY);
             var (nonce, ct, tag) = Crypto.EncryptAesGcm(bek, plaintext, ad);
 
             b.Nonce = nonce;
@@ -1714,6 +1398,10 @@ namespace HSTRYDoc
                 throw new InvalidOperationException("Container is not open/initialized (no key in memory).");
             if (_key.Length != 32)
                 throw new InvalidOperationException("Invalid container key length in memory.");
+            if (Version != V6)
+                throw new InvalidOperationException("Invalid container version in memory.");
+            if (ContainerId == null || ContainerId.Length != ContainerIdSize)
+                throw new InvalidOperationException("ContainerId missing/invalid in memory.");
         }
 
         public void CloseKeyMaterial()
@@ -1731,13 +1419,281 @@ namespace HSTRYDoc
                 b.BlockKey = null;
             }
         }
+
+        // ============================================================
+        // Header signing / verification (ECDSA)
+        // ============================================================
+        private void EnsureHeaderSigned()
+        {
+            if (HeaderSignature == null || HeaderSignature.Length == 0)
+                throw new InvalidOperationException("Header is not signed.");
+            if (HeaderSignatureAlg != HEADER_SIGALG_ECDSA_P384_SHA256)
+                throw new InvalidOperationException("Unsupported header signature algorithm.");
+        }
+
+        private void EnsureOwnerSigningPrivateKeyMatches(ECDsa ownerSigningPrivateKey)
+        {
+            if (ownerSigningPrivateKey == null)
+                throw new ArgumentNullException(nameof(ownerSigningPrivateKey));
+
+            byte[] spki = ownerSigningPrivateKey.ExportSubjectPublicKeyInfo();
+            if (!spki.SequenceEqual(OwnerSigningPublicKeySpki))
+                throw new CryptographicException("The provided owner signing private key does not match the container owner signing public key.");
+        }
+
+        private void EnsureOwnerEcdhPrivateKeyMatches(ECDiffieHellman ownerEcdhPrivateKey)
+        {
+            if (ownerEcdhPrivateKey == null)
+                throw new ArgumentNullException(nameof(ownerEcdhPrivateKey));
+
+            byte[] spki = ownerEcdhPrivateKey.ExportSubjectPublicKeyInfo();
+            if (!spki.SequenceEqual(OwnerEcdhPublicKeySpki))
+                throw new CryptographicException("The provided owner ECDH private key does not match the container owner ECDH public key.");
+        }
+
+        private byte[] BuildHeaderSigningData()
+        {
+            using var ms = new MemoryStream();
+            using var bw = new BinaryWriter(ms, Encoding.UTF8, leaveOpen: true);
+
+            bw.Write(Version);
+
+            byte[] encBytes = Encoding.UTF8.GetBytes(EncodingWebName);
+            bw.Write((byte)encBytes.Length);
+            bw.Write(encBytes);
+
+            bw.Write((ushort)OwnerSigningPublicKeySpki.Length);
+            bw.Write(OwnerSigningPublicKeySpki);
+
+            bw.Write((ushort)OwnerEcdhPublicKeySpki.Length);
+            bw.Write(OwnerEcdhPublicKeySpki);
+
+            if (ContainerId == null || ContainerId.Length != ContainerIdSize)
+                throw new InvalidOperationException("ContainerId missing/invalid.");
+
+            bw.Write(ContainerId);
+
+            bw.Write(_recipients.Count);
+            foreach (var r in _recipients)
+            {
+                bw.Write((byte)r.KeyId.Length);
+                bw.Write(r.KeyId);
+
+                bw.Write((ushort)r.PublicKeySpki.Length);
+                bw.Write(r.PublicKeySpki);
+
+                bw.Write(r.Alg);
+
+                bw.Write((ushort)r.WrappedDek.Length);
+                bw.Write(r.WrappedDek);
+            }
+
+            bw.Flush();
+            return ms.ToArray();
+        }
+
+        private void ResignHeader(ECDsa ownerSigningPrivateKey)
+        {
+            EnsureOwnerSigningPrivateKeyMatches(ownerSigningPrivateKey);
+
+            byte[] data = BuildHeaderSigningData();
+            HeaderSignatureAlg = HEADER_SIGALG_ECDSA_P384_SHA256;
+            HeaderSignature = ownerSigningPrivateKey.SignData(data, HashAlgorithmName.SHA256);
+        }
+
+        private void VerifyHeaderSignatureOrThrow()
+        {
+            if (OwnerSigningPublicKeySpki == null || OwnerSigningPublicKeySpki.Length == 0)
+                throw new InvalidDataException("Owner signing public key missing.");
+
+            if (HeaderSignature == null || HeaderSignature.Length == 0)
+                throw new InvalidDataException("Header signature missing.");
+
+            if (HeaderSignatureAlg != HEADER_SIGALG_ECDSA_P384_SHA256)
+                throw new InvalidDataException("Unsupported header signature algorithm.");
+
+            using var ownerPub = ECDsa.Create();
+            ownerPub.ImportSubjectPublicKeyInfo(OwnerSigningPublicKeySpki, out _);
+
+            byte[] data = BuildHeaderSigningData();
+
+            bool ok = ownerPub.VerifyData(data, HeaderSignature, HashAlgorithmName.SHA256);
+            if (!ok)
+                throw new InvalidDataException("Header signature invalid. The file may have been tampered with.");
+        }
     }
 
     public sealed class RecipientEntry
     {
-        public byte[] KeyId { get; set; } = Array.Empty<byte>();      // 32 bytes SHA-256(SPKI)
-        public byte[] PublicKeySpki { get; set; } = Array.Empty<byte>(); // V4 only (required in V4)
-        public byte Alg { get; set; }                                  // 1 = RSA-OAEP-SHA256
-        public byte[] WrappedDek { get; set; } = Array.Empty<byte>();  // RSA-encrypted 32-byte container DEK
+        public byte[] KeyId { get; set; } = Array.Empty<byte>();         // 32 bytes SHA-256(SPKI)
+        public byte[] PublicKeySpki { get; set; } = Array.Empty<byte>(); // ECDH SPKI (V6)
+        public byte Alg { get; set; }                                    // 1 = ECDH-HKDF-SHA256-AESGCM
+        public byte[] WrappedDek { get; set; } = Array.Empty<byte>();    // envelope for 32-byte DEK
+    }
+
+    // ============================================================
+    // ECC Key Wrap: ECDH(P-384) + HKDF-SHA256 + AES-GCM envelope
+    // with ContainerId binding
+    // ============================================================
+    internal static class EccKeyWrap
+    {
+        private const int SaltSize = 32;
+        private const int NonceSize = 12;
+        private const int TagSize = 16;
+
+        private static readonly byte[] InfoPrefix = Encoding.ASCII.GetBytes("HSTRY-KEYWRAP-V6");
+        private static readonly byte[] AdPrefix = Encoding.ASCII.GetBytes("HSTRY-KEYWRAP-AD-V6");
+
+        public static byte[] WrapKey32(byte[] key32, byte[] recipientEcdhSpki, byte[] recipientKeyId, byte purpose, byte[] containerId)
+        {
+            if (key32 == null || key32.Length != 32) throw new ArgumentException("Key must be 32 bytes.", nameof(key32));
+            if (recipientKeyId == null || recipientKeyId.Length != 32) throw new ArgumentException("recipientKeyId must be 32 bytes.", nameof(recipientKeyId));
+            if (containerId == null || containerId.Length != 32) throw new ArgumentException("containerId must be 32 bytes.", nameof(containerId));
+
+            using var recipient = ECDiffieHellman.Create();
+            recipient.ImportSubjectPublicKeyInfo(recipientEcdhSpki, out _);
+
+            using var ephem = ECDiffieHellman.Create(ECCurve.NamedCurves.nistP384);
+            byte[] epkSpki = ephem.ExportSubjectPublicKeyInfo();
+
+            byte[] ikm = ephem.DeriveKeyMaterial(recipient.PublicKey);
+
+            byte[] salt = new byte[SaltSize];
+            RandomNumberGenerator.Fill(salt);
+
+            byte[] info = BuildInfo(purpose, recipientKeyId, containerId);
+            byte[] kek = HkdfSha256(ikm, salt, info, 32);
+
+            byte[] ad = BuildAd(purpose, recipientKeyId, epkSpki, containerId);
+
+            var (nonce, ct, tag) = Crypto.EncryptAesGcm(kek, key32, ad);
+
+            // Envelope:
+            // u16 epkLen | epkSpki | salt(32) | nonce(12) | tag(16) | u16 ctLen | ct
+            using var ms = new MemoryStream();
+            using var bw = new BinaryWriter(ms, Encoding.UTF8, leaveOpen: true);
+
+            if (epkSpki.Length > ushort.MaxValue) throw new InvalidOperationException("Ephemeral SPKI too large.");
+            bw.Write((ushort)epkSpki.Length);
+            bw.Write(epkSpki);
+
+            bw.Write(salt);
+            bw.Write(nonce);
+            bw.Write(tag);
+
+            if (ct.Length > ushort.MaxValue) throw new InvalidOperationException("Ciphertext too large.");
+            bw.Write((ushort)ct.Length);
+            bw.Write(ct);
+
+            bw.Flush();
+
+            CryptographicOperations.ZeroMemory(ikm);
+            CryptographicOperations.ZeroMemory(kek);
+
+            return ms.ToArray();
+        }
+
+        public static byte[] UnwrapKey32(ECDiffieHellman myPrivateEcdh, byte[] envelope, byte[] myKeyId, byte purpose, byte[] containerId)
+        {
+            if (myPrivateEcdh == null) throw new ArgumentNullException(nameof(myPrivateEcdh));
+            if (myKeyId == null || myKeyId.Length != 32) throw new ArgumentException("myKeyId must be 32 bytes.", nameof(myKeyId));
+            if (containerId == null || containerId.Length != 32) throw new ArgumentException("containerId must be 32 bytes.", nameof(containerId));
+
+            using var ms = new MemoryStream(envelope, writable: false);
+            using var br = new BinaryReader(ms, Encoding.UTF8, leaveOpen: true);
+
+            ushort epkLen = br.ReadUInt16();
+            if (epkLen == 0) throw new CryptographicException("Invalid envelope (epkLen=0).");
+            byte[] epkSpki = br.ReadBytes(epkLen);
+
+            byte[] salt = br.ReadBytes(SaltSize);
+            if (salt.Length != SaltSize) throw new CryptographicException("Invalid envelope (salt).");
+
+            byte[] nonce = br.ReadBytes(NonceSize);
+            if (nonce.Length != NonceSize) throw new CryptographicException("Invalid envelope (nonce).");
+
+            byte[] tag = br.ReadBytes(TagSize);
+            if (tag.Length != TagSize) throw new CryptographicException("Invalid envelope (tag).");
+
+            ushort ctLen = br.ReadUInt16();
+            if (ctLen == 0) throw new CryptographicException("Invalid envelope (ctLen=0).");
+            byte[] ct = br.ReadBytes(ctLen);
+            if (ct.Length != ctLen) throw new CryptographicException("Invalid envelope (ct).");
+
+            using var epk = ECDiffieHellman.Create();
+            epk.ImportSubjectPublicKeyInfo(epkSpki, out _);
+
+            byte[] ikm = myPrivateEcdh.DeriveKeyMaterial(epk.PublicKey);
+
+            byte[] info = BuildInfo(purpose, myKeyId, containerId);
+            byte[] kek = HkdfSha256(ikm, salt, info, 32);
+
+            byte[] ad = BuildAd(purpose, myKeyId, epkSpki, containerId);
+
+            byte[] key32 = Crypto.DecryptAesGcm(kek, nonce, ct, tag, ad);
+            if (key32 == null || key32.Length != 32) throw new CryptographicException("Invalid unwrapped key length.");
+
+            CryptographicOperations.ZeroMemory(ikm);
+            CryptographicOperations.ZeroMemory(kek);
+
+            return key32;
+        }
+
+        private static byte[] BuildInfo(byte purpose, byte[] keyId, byte[] containerId)
+        {
+            byte[] info = new byte[InfoPrefix.Length + 1 + 32 + 32];
+            Buffer.BlockCopy(InfoPrefix, 0, info, 0, InfoPrefix.Length);
+            info[InfoPrefix.Length] = purpose;
+            Buffer.BlockCopy(keyId, 0, info, InfoPrefix.Length + 1, 32);
+            Buffer.BlockCopy(containerId, 0, info, InfoPrefix.Length + 1 + 32, 32);
+            return info;
+        }
+
+        private static byte[] BuildAd(byte purpose, byte[] keyId, byte[] epkSpki, byte[] containerId)
+        {
+            // AD = "HSTRY-KEYWRAP-AD-V6" | purpose | keyId | SHA256(epkSpki) | containerId
+            byte[] epkHash = SHA256.HashData(epkSpki);
+            byte[] ad = new byte[AdPrefix.Length + 1 + 32 + 32 + 32];
+
+            Buffer.BlockCopy(AdPrefix, 0, ad, 0, AdPrefix.Length);
+            ad[AdPrefix.Length] = purpose;
+            Buffer.BlockCopy(keyId, 0, ad, AdPrefix.Length + 1, 32);
+            Buffer.BlockCopy(epkHash, 0, ad, AdPrefix.Length + 1 + 32, 32);
+            Buffer.BlockCopy(containerId, 0, ad, AdPrefix.Length + 1 + 32 + 32, 32);
+
+            return ad;
+        }
+
+        private static byte[] HkdfSha256(byte[] ikm, byte[] salt, byte[] info, int length)
+        {
+            byte[] prk;
+            using (var h = new HMACSHA256(salt))
+                prk = h.ComputeHash(ikm);
+
+            const int HashLen = 32;
+            int n = (length + HashLen - 1) / HashLen;
+            if (n > 255) throw new ArgumentOutOfRangeException(nameof(length), "HKDF length too large.");
+
+            byte[] okm = new byte[length];
+            byte[] t = Array.Empty<byte>();
+            int off = 0;
+
+            for (int i = 1; i <= n; i++)
+            {
+                using var hmac = new HMACSHA256(prk);
+                hmac.TransformBlock(t, 0, t.Length, null, 0);
+                hmac.TransformBlock(info, 0, info.Length, null, 0);
+                hmac.TransformFinalBlock(new[] { (byte)i }, 0, 1);
+
+                t = hmac.Hash!;
+                int toCopy = Math.Min(HashLen, length - off);
+                Buffer.BlockCopy(t, 0, okm, off, toCopy);
+                off += toCopy;
+            }
+
+            CryptographicOperations.ZeroMemory(prk);
+            CryptographicOperations.ZeroMemory(t);
+            return okm;
+        }
     }
 }

@@ -1,8 +1,10 @@
-﻿// Block.cs (supports V2/V3/V4 in-memory)
-// V2 fields used: Title (plaintext), Nonce/Tag/Ciphertext (body)
-// V3 fields used: TitleNonce/TitleTag/TitleCiphertext + Nonce/Tag/Ciphertext (body)
-// V4 fields used: KeySlots + TitleNonce/TitleTag/TitleCiphertext + Nonce/Tag/Ciphertext (body)
-// Title is plaintext in memory (hydrated during Validate for V3/V4), not stored plaintext on disk in V3/V4.
+﻿// Block.cs (V5 in-memory)
+// - V5 fields used:
+//   - KeySlots + TitleNonce/TitleTag/TitleCiphertext + Nonce/Tag/Ciphertext
+// - Per-block access control via BEK (Block Encryption Key, 32 bytes) and KeySlots.
+// - KeySlots store: KeyId (SHA256(ECDH SPKI), 32 bytes) + Rights + Alg + WrappedBek(envelope).
+// - Alg:
+//   - 1 = ECDH(P-256) + HKDF-SHA256 + AES-GCM key-wrap envelope (for BEK)
 
 using System;
 using System.Collections.Generic;
@@ -19,32 +21,39 @@ namespace HSTRYDoc
 
     public sealed class BlockKeySlot
     {
-        public byte[] KeyId { get; set; } = Array.Empty<byte>();       // 32 bytes SHA256(SPKI)
+        // 32 bytes = SHA-256(ECDH SPKI)
+        public byte[] KeyId { get; set; } = Array.Empty<byte>();
+
         public BlockRights Rights { get; set; } = BlockRights.None;
-        public byte Alg { get; set; }                                  // 1 = RSA-OAEP-SHA256
-        public byte[] WrappedBek { get; set; } = Array.Empty<byte>();  // RSA-encrypted 32-byte BEK
+
+        // 1 = ECDH-HKDF-SHA256-AESGCM envelope
+        public byte Alg { get; set; }
+
+        // Wrapped 32-byte BEK as an envelope blob (format depends on Alg)
+        public byte[] WrappedBek { get; set; } = Array.Empty<byte>();
     }
 
     public sealed class Block
     {
         public int Index { get; internal set; }
 
-        // Plaintext title in memory only (hydrated on Validate for V3/V4)
+        // Plaintext title in memory only (hydrated during Validate() when readable)
         public string Title { get; internal set; } = string.Empty;
 
         public DateTimeOffset CreatedUtc { get; internal set; } = DateTimeOffset.UtcNow;
         public DateTimeOffset ModifiedUtc { get; internal set; } = DateTimeOffset.UtcNow;
 
+        // 32 bytes SHA-256 hash chain (same as before)
         public byte[] PrevHash { get; internal set; } = new byte[Crypto.Sha256Size];
 
-        // V4: Per-block access control
+        // Per-block access control (V5)
         public List<BlockKeySlot> KeySlots { get; } = new();
 
         // In-memory only (not stored):
-        internal byte[]? BlockKey { get; set; } = null;     // decrypted BEK for active user (if any)
+        internal byte[]? BlockKey { get; set; } = null; // decrypted BEK for active user (32 bytes)
         internal BlockRights MyRights { get; set; } = BlockRights.None;
 
-        // V3/V4: AES-GCM payload for title
+        // AES-GCM payload for title
         public byte[] TitleNonce { get; internal set; } = Array.Empty<byte>();      // 12 bytes
         public byte[] TitleTag { get; internal set; } = Array.Empty<byte>();        // 16 bytes
         public byte[] TitleCiphertext { get; internal set; } = Array.Empty<byte>(); // n bytes
