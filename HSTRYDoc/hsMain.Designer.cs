@@ -773,52 +773,57 @@
             // 
             newToolStripMenuItem.Image = (Image)resources.GetObject("newToolStripMenuItem.Image");
             newToolStripMenuItem.Name = "newToolStripMenuItem";
-            newToolStripMenuItem.Size = new Size(178, 22);
+            newToolStripMenuItem.ShortcutKeys = Keys.Control | Keys.N;
+            newToolStripMenuItem.Size = new Size(216, 26);
             newToolStripMenuItem.Text = "New Block...";
             // 
             // toolStripMenuItem1
             // 
             toolStripMenuItem1.Name = "toolStripMenuItem1";
-            toolStripMenuItem1.Size = new Size(175, 6);
+            toolStripMenuItem1.Size = new Size(213, 6);
             // 
             // saveContainerToolStripMenuItem
             // 
             saveContainerToolStripMenuItem.Image = (Image)resources.GetObject("saveContainerToolStripMenuItem.Image");
             saveContainerToolStripMenuItem.Name = "saveContainerToolStripMenuItem";
-            saveContainerToolStripMenuItem.Size = new Size(178, 22);
+            saveContainerToolStripMenuItem.ShortcutKeys = Keys.Control | Keys.S;
+            saveContainerToolStripMenuItem.Size = new Size(216, 26);
             saveContainerToolStripMenuItem.Text = "Save Container...";
             // 
             // saveContainerAsToolStripMenuItem
             // 
             saveContainerAsToolStripMenuItem.Name = "saveContainerAsToolStripMenuItem";
-            saveContainerAsToolStripMenuItem.Size = new Size(178, 22);
+            saveContainerAsToolStripMenuItem.Size = new Size(216, 26);
             saveContainerAsToolStripMenuItem.Text = "Save Container As...";
             // 
             // openContainerToolStripMenuItem
             // 
             openContainerToolStripMenuItem.Image = (Image)resources.GetObject("openContainerToolStripMenuItem.Image");
             openContainerToolStripMenuItem.Name = "openContainerToolStripMenuItem";
-            openContainerToolStripMenuItem.Size = new Size(178, 22);
+            openContainerToolStripMenuItem.ShortcutKeys = Keys.Control | Keys.O;
+            openContainerToolStripMenuItem.Size = new Size(216, 26);
             openContainerToolStripMenuItem.Text = "Open Container...";
             // 
             // exportBlockToolStripMenuItem
             // 
             exportBlockToolStripMenuItem.Image = (Image)resources.GetObject("exportBlockToolStripMenuItem.Image");
             exportBlockToolStripMenuItem.Name = "exportBlockToolStripMenuItem";
-            exportBlockToolStripMenuItem.Size = new Size(178, 22);
+            exportBlockToolStripMenuItem.ShortcutKeys = Keys.Control | Keys.E;
+            exportBlockToolStripMenuItem.Size = new Size(216, 26);
             exportBlockToolStripMenuItem.Text = "Export Blocks...";
             exportBlockToolStripMenuItem.Click += exportBlockToolStripMenuItem_Click;
             // 
             // toolStripMenuItem2
             // 
             toolStripMenuItem2.Name = "toolStripMenuItem2";
-            toolStripMenuItem2.Size = new Size(175, 6);
+            toolStripMenuItem2.Size = new Size(213, 6);
             // 
             // closeToolStripMenuItem
             // 
             closeToolStripMenuItem.Image = (Image)resources.GetObject("closeToolStripMenuItem.Image");
             closeToolStripMenuItem.Name = "closeToolStripMenuItem";
-            closeToolStripMenuItem.Size = new Size(178, 22);
+            closeToolStripMenuItem.ShortcutKeys = Keys.Alt | Keys.F4;
+            closeToolStripMenuItem.Size = new Size(216, 26);
             closeToolStripMenuItem.Text = "Exit";
             closeToolStripMenuItem.Click += closeToolStripMenuItem_Click;
             // 
@@ -833,14 +838,16 @@
             // 
             searchInBlockToolStripMenuItem.Image = (Image)resources.GetObject("searchInBlockToolStripMenuItem.Image");
             searchInBlockToolStripMenuItem.Name = "searchInBlockToolStripMenuItem";
-            searchInBlockToolStripMenuItem.Size = new Size(186, 22);
+            searchInBlockToolStripMenuItem.ShortcutKeys = Keys.Control | Keys.Shift | Keys.F;
+            searchInBlockToolStripMenuItem.Size = new Size(317, 26);
             searchInBlockToolStripMenuItem.Text = "Search in Block...";
             // 
             // searchInContainerToolStripMenuItem
             // 
             searchInContainerToolStripMenuItem.Image = (Image)resources.GetObject("searchInContainerToolStripMenuItem.Image");
             searchInContainerToolStripMenuItem.Name = "searchInContainerToolStripMenuItem";
-            searchInContainerToolStripMenuItem.Size = new Size(186, 22);
+            searchInContainerToolStripMenuItem.ShortcutKeys = Keys.Control | Keys.Shift | Keys.C;
+            searchInContainerToolStripMenuItem.Size = new Size(317, 26);
             searchInContainerToolStripMenuItem.Text = "Search in Container...";
             // 
             // keyManagementToolStripMenuItem
@@ -848,7 +855,8 @@
             keyManagementToolStripMenuItem.DropDownItems.AddRange(new ToolStripItem[] { keyLookupExternalDriveToolStripMenuItem });
             keyManagementToolStripMenuItem.Image = (Image)resources.GetObject("keyManagementToolStripMenuItem.Image");
             keyManagementToolStripMenuItem.Name = "keyManagementToolStripMenuItem";
-            keyManagementToolStripMenuItem.Size = new Size(186, 22);
+            keyManagementToolStripMenuItem.ShortcutKeys = Keys.Control | Keys.Shift | Keys.K;
+            keyManagementToolStripMenuItem.Size = new Size(317, 26);
             keyManagementToolStripMenuItem.Text = "Key Management";
             keyManagementToolStripMenuItem.Click += keyManagementToolStripMenuItem_Click;
             // 
@@ -870,7 +878,8 @@
             // 
             aboutToolStripMenuItem.Image = (Image)resources.GetObject("aboutToolStripMenuItem.Image");
             aboutToolStripMenuItem.Name = "aboutToolStripMenuItem";
-            aboutToolStripMenuItem.Size = new Size(116, 22);
+            aboutToolStripMenuItem.ShortcutKeys = Keys.Shift | Keys.F1;
+            aboutToolStripMenuItem.Size = new Size(222, 26);
             aboutToolStripMenuItem.Text = "About...";
             aboutToolStripMenuItem.Click += aboutToolStripMenuItem_Click;
             // 

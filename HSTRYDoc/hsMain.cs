@@ -2296,7 +2296,7 @@ namespace HSTRYDoc
             int selStart = rtb.SelectionStart;
             int selLen = rtb.SelectionLength;
 
-            // No selection -> insert a tab at caret
+            // No selection -> normal tab insert with current typing format
             if (selLen == 0)
             {
                 rtb.SelectedText = "\t";
@@ -2305,7 +2305,6 @@ namespace HSTRYDoc
 
             int firstLine = rtb.GetLineFromCharIndex(selStart);
 
-            // Use last selected character so "end at line start" doesn't include next line
             int lastChar = Math.Max(selStart, selStart + selLen - 1);
             int lastLine = rtb.GetLineFromCharIndex(lastChar);
 
@@ -2313,23 +2312,39 @@ namespace HSTRYDoc
             for (int line = firstLine; line <= lastLine; line++)
                 lineStarts.Add(rtb.GetFirstCharIndexFromLine(line));
 
-            // Insert from bottom to top so indices stay stable
-            for (int i = lineStarts.Count - 1; i >= 0; i--)
+            rtb.SuspendLayout();
+            try
             {
-                int idx = lineStarts[i];
-                if (idx < 0 || idx > rtb.TextLength) continue;
+                // Insert bottom->top so indices stay stable
+                for (int i = lineStarts.Count - 1; i >= 0; i--)
+                {
+                    int lineStart = lineStarts[i];
+                    if (lineStart < 0 || lineStart > rtb.TextLength) continue;
 
-                rtb.Select(idx, 0);
-                rtb.SelectedText = "\t";
+                    // Find a reference character in that line to copy formatting from
+                    int refPos = FindFirstNonNewlineCharInLine(rtb, lineStart);
+
+                    // Copy char format (font/colors) from refPos
+                    var fmt = GetCharFormat(rtb, refPos >= 0 ? refPos : Math.Max(0, Math.Min(lineStart, rtb.TextLength - 1)));
+
+                    // Insert tab at line start using that format
+                    rtb.Select(lineStart, 0);
+                    ApplyFormatForInsertion(rtb, fmt);
+                    rtb.SelectedText = "\t";
+                }
+
+                int insertedTotal = lineStarts.Count;
+                int insertedBeforeStart = lineStarts.Count(x => x <= selStart);
+
+                int newStart = selStart + insertedBeforeStart;
+                int newLen = selLen + insertedTotal;
+
+                rtb.Select(newStart, newLen);
             }
-
-            int insertedTotal = lineStarts.Count;
-            int insertedBeforeStart = lineStarts.Count(x => x <= selStart);
-
-            // Restore selection (keep original content selected, shifted)
-            int newStart = selStart + insertedBeforeStart;
-            int newLen = selLen + insertedTotal;
-            rtb.Select(newStart, newLen);
+            finally
+            {
+                rtb.ResumeLayout();
+            }
         }
 
         private static void UnindentSelectionByTab(RichTextBox rtb)
@@ -2337,13 +2352,12 @@ namespace HSTRYDoc
             int selStart = rtb.SelectionStart;
             int selLen = rtb.SelectionLength;
 
-            // No selection -> try remove a tab just before caret
+            // No selection -> remove one tab before caret if present
             if (selLen == 0)
             {
                 if (selStart <= 0) return;
 
-                char prev = rtb.Text[selStart - 1];
-                if (prev == '\t')
+                if (rtb.Text[selStart - 1] == '\t')
                 {
                     rtb.Select(selStart - 1, 1);
                     rtb.SelectedText = "";
@@ -2363,41 +2377,106 @@ namespace HSTRYDoc
             int removedTotal = 0;
             int removedBeforeStart = 0;
 
-            // Remove from bottom to top
-            for (int i = lineStarts.Count - 1; i >= 0; i--)
+            rtb.SuspendLayout();
+            try
             {
-                int idx = lineStarts[i];
-                if (idx < 0 || idx >= rtb.TextLength) continue;
-
-                // Remove either a leading tab or 4 leading spaces
-                if (rtb.Text[idx] == '\t')
+                // Remove bottom->top
+                for (int i = lineStarts.Count - 1; i >= 0; i--)
                 {
-                    rtb.Select(idx, 1);
-                    rtb.SelectedText = "";
-                    removedTotal += 1;
-                    if (idx < selStart) removedBeforeStart += 1;
-                }
-                else
-                {
-                    // Optional: treat 4 spaces as one indent level
-                    int max = Math.Min(4, rtb.TextLength - idx);
-                    int spaces = 0;
-                    while (spaces < max && rtb.Text[idx + spaces] == ' ') spaces++;
+                    int idx = lineStarts[i];
+                    if (idx < 0 || idx >= rtb.TextLength) continue;
 
-                    if (spaces > 0)
+                    if (rtb.Text[idx] == '\t')
                     {
-                        rtb.Select(idx, spaces);
+                        rtb.Select(idx, 1);
                         rtb.SelectedText = "";
-                        removedTotal += spaces;
-                        if (idx < selStart) removedBeforeStart += spaces;
+                        removedTotal += 1;
+                        if (idx < selStart) removedBeforeStart += 1;
+                    }
+                    else
+                    {
+                        // Optional: treat leading spaces as indent (up to 4)
+                        int max = Math.Min(4, rtb.TextLength - idx);
+                        int spaces = 0;
+                        while (spaces < max && rtb.Text[idx + spaces] == ' ') spaces++;
+
+                        if (spaces > 0)
+                        {
+                            rtb.Select(idx, spaces);
+                            rtb.SelectedText = "";
+                            removedTotal += spaces;
+                            if (idx < selStart) removedBeforeStart += spaces;
+                        }
                     }
                 }
-            }
 
-            int newStart = Math.Max(0, selStart - removedBeforeStart);
-            int newLen = Math.Max(0, selLen - removedTotal);
-            rtb.Select(newStart, newLen);
+                int newStart = Math.Max(0, selStart - removedBeforeStart);
+                int newLen = Math.Max(0, selLen - removedTotal);
+                rtb.Select(newStart, newLen);
+            }
+            finally
+            {
+                rtb.ResumeLayout();
+            }
         }
+
+        private static int FindFirstNonNewlineCharInLine(RichTextBox rtb, int lineStart)
+        {
+            if (rtb.TextLength == 0) return -1;
+            if (lineStart < 0 || lineStart >= rtb.TextLength) return -1;
+
+            // Scan forward until end-of-line or end-of-text
+            int i = lineStart;
+            while (i < rtb.TextLength)
+            {
+                char c = rtb.Text[i];
+                if (c == '\r' || c == '\n') return -1; // empty line
+                return i; // first char in line
+            }
+            return -1;
+        }
+
+        private readonly struct CharFormat
+        {
+            public CharFormat(Font font, Color fore, Color back)
+            {
+                Font = font;
+                Fore = fore;
+                Back = back;
+            }
+            public Font Font { get; }
+            public Color Fore { get; }
+            public Color Back { get; }
+        }
+
+        private static CharFormat GetCharFormat(RichTextBox rtb, int pos)
+        {
+            if (rtb.TextLength == 0)
+                return new CharFormat(rtb.Font, rtb.ForeColor, rtb.BackColor);
+
+            pos = Math.Max(0, Math.Min(pos, rtb.TextLength - 1));
+
+            int s = rtb.SelectionStart;
+            int l = rtb.SelectionLength;
+
+            rtb.Select(pos, 1);
+            Font f = rtb.SelectionFont ?? rtb.Font;
+            Color fore = rtb.SelectionColor;
+            Color back = rtb.SelectionBackColor;
+
+            rtb.Select(s, l);
+
+            return new CharFormat(f, fore, back);
+        }
+
+        private static void ApplyFormatForInsertion(RichTextBox rtb, CharFormat fmt)
+        {
+            // Important: apply before inserting so RichEdit doesn't "invent" a new default run
+            rtb.SelectionFont = fmt.Font;
+            rtb.SelectionColor = fmt.Fore;
+            rtb.SelectionBackColor = fmt.Back;
+        }
+
 
 
         // ============================================================
