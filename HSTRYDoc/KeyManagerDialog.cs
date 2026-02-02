@@ -22,6 +22,12 @@ namespace HSTRYDoc
 {
     public partial class KeyManagerDialog : Form
     {
+
+        private readonly Func<string?>? _passwordProvider;
+private readonly Action<string?>? _passwordStore;
+
+        private string? _sessionKeyPassword;
+
         private readonly HSTRYContainer _container;
         private readonly string _containerPath;
 
@@ -96,6 +102,162 @@ namespace HSTRYDoc
             btnCancel.Enabled = !busy;
         }
 
+        private void ClearLoadedKeys()
+        {
+            _myEcdhPrivateKey?.Dispose();
+            _myEcdhPrivateKey = null;
+
+            _mySigningPrivateKey?.Dispose();
+            _mySigningPrivateKey = null;
+
+            _myKeyIdHex = null;
+            _isOwnerKeyLoaded = false;
+
+            UpdateMyKeyUi(SelectedEcdhPrivateKeyPath, null);
+        }
+
+        private bool EnsureKeysLoadedForAction(bool requireOwner, bool requireSigningKey, bool showErrors)
+        {
+            if (_myEcdhPrivateKey != null)
+            {
+                // already loaded
+                if (requireOwner && !_isOwnerKeyLoaded)
+                {
+                    if (showErrors)
+                        MessageBox.Show(this, "Load the OWNER ECDH private key for this operation.", "Key required",
+                            MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    return false;
+                }
+
+                if (requireSigningKey && _isOwnerKeyLoaded && _mySigningPrivateKey == null)
+                {
+                    // try load signing key if missing
+                    TryLoadSigningKeyForEcdhPath(SelectedEcdhPrivateKeyPath ?? "", showErrors: showErrors);
+                    if (_mySigningPrivateKey == null)
+                        return false;
+                }
+
+                return true;
+            }
+
+            // Need a selected path
+            if (string.IsNullOrWhiteSpace(SelectedEcdhPrivateKeyPath) || !File.Exists(SelectedEcdhPrivateKeyPath))
+            {
+                if (showErrors)
+                    MessageBox.Show(this, "No private key file selected.", "Key required",
+                        MessageBoxButtons.OK, MessageBoxIcon.Information);
+                return false;
+            }
+
+            // Prompt password only now
+            if (!EnsureSessionPasswordPrompt(out string pw))
+                return false;
+
+            try
+            {
+                _myEcdhPrivateKey = LoadEcdhPrivateKeyWithPassword(SelectedEcdhPrivateKeyPath!, pw);
+
+                byte[] keyId = HSTRYContainer.EcdhKeyFiles.ComputeKeyIdFromPublicKey(_myEcdhPrivateKey);
+                _myKeyIdHex = Convert.ToHexString(keyId);
+
+                _isOwnerKeyLoaded = IsOwnerEcdhPrivateKey(_myEcdhPrivateKey);
+
+                // If owner and signing key is required, load it
+                if (_isOwnerKeyLoaded && requireSigningKey)
+                    TryLoadSigningKeyForEcdhPath(SelectedEcdhPrivateKeyPath!, showErrors: showErrors);
+
+                UpdateMyKeyUi(SelectedEcdhPrivateKeyPath, _myKeyIdHex);
+
+                if (requireOwner && !_isOwnerKeyLoaded)
+                {
+                    if (showErrors)
+                        MessageBox.Show(this, "Load the OWNER ECDH private key for this operation.", "Key required",
+                            MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    return false;
+                }
+
+                if (requireSigningKey && _isOwnerKeyLoaded && _mySigningPrivateKey == null)
+                    return false;
+
+                return true;
+            }
+            catch (CryptographicException)
+            {
+                _sessionKeyPassword = null;
+                ClearLoadedKeys();
+
+                if (showErrors)
+                    MessageBox.Show(this, "Wrong password or corrupted key file.", "Load key",
+                        MessageBoxButtons.OK, MessageBoxIcon.Error);
+
+                return false;
+            }
+        }
+
+
+        // ============================================================
+        // Password helpers (dialog-session cached)
+        // ============================================================
+        private bool EnsureSessionPasswordPrompt(out string password)
+        {
+            password = _sessionKeyPassword ?? string.Empty;
+
+            if (!string.IsNullOrWhiteSpace(_sessionKeyPassword))
+                return true;
+
+            string? pw = PasswordDialog.ShowPassword(
+                this,
+                "Unlock key",
+                "Enter password:",
+                PasswordDialog.PasswordDialogMode.Prompt);
+
+            if (pw == null)
+                return false;
+
+            if (string.IsNullOrWhiteSpace(pw))
+                return false;
+
+            _sessionKeyPassword = pw;
+            password = pw;
+            return true;
+        }
+
+        private bool EnsureNewPasswordSet(out string password)
+        {
+            password = string.Empty;
+
+            string? pw = PasswordDialog.ShowPassword(
+                this,
+                "Set password",
+                "Set a password for this private key set:",
+                PasswordDialog.PasswordDialogMode.SetNew);
+
+            if (pw == null)
+                return false;
+
+            if (string.IsNullOrWhiteSpace(pw))
+                return false;
+
+            // IMPORTANT: Do NOT overwrite _sessionKeyPassword here!
+            password = pw;
+            return true;
+        }
+
+        private ECDiffieHellman LoadEcdhPrivateKeyWithPassword(string ecdhPrivPath, string password)
+        {
+            return HSTRYContainer.EcdhKeyFiles.LoadPrivateKeyPkcs8Encrypted(ecdhPrivPath, password);
+        }
+
+        private ECDsa LoadEcdsaSigningKeyWithPassword(string ecdhPrivPath, string password)
+        {
+            string signPath = DeriveSigningPrivateKeyPath(ecdhPrivPath);
+            if (!File.Exists(signPath))
+                throw new FileNotFoundException("Owner signing key is missing.", signPath);
+
+            return HSTRYContainer.EcdsaKeyFiles.LoadPrivateKeyPkcs8Encrypted(signPath, password);
+        }
+
+
         private void LvwRecipients_DragEnter(object? sender, DragEventArgs e)
         {
             if (!_isOwnerKeyLoaded || _container.Version != HSTRYContainer.CurrentVersion)
@@ -110,18 +272,15 @@ namespace HSTRYDoc
 
         private void LvwRecipients_DragDrop(object? sender, DragEventArgs e)
         {
-            if (!_isOwnerKeyLoaded || _mySigningPrivateKey == null)
-                return;
-
             if (_container.Version != HSTRYContainer.CurrentVersion)
             {
-                MessageBox.Show(this,
-                    "This container is not V6.",
-                    "Recipients",
-                    MessageBoxButtons.OK,
-                    MessageBoxIcon.Warning);
+                MessageBox.Show(this, "This container is not V6.", "Recipients",
+                    MessageBoxButtons.OK, MessageBoxIcon.Warning);
                 return;
             }
+
+            if (!EnsureKeysLoadedForAction(requireOwner: true, requireSigningKey: true, showErrors: true))
+                return;
 
             if (e.Data?.GetData(DataFormats.FileDrop) is not string[] files || files.Length == 0)
                 return;
@@ -137,7 +296,7 @@ namespace HSTRYDoc
                 try
                 {
                     using var pub = HSTRYContainer.EcdhKeyFiles.LoadPublicKeySpki(f);
-                    _container.AddRecipient(_mySigningPrivateKey, pub);
+                    _container.AddRecipient(_mySigningPrivateKey!, pub);
                     added++;
                     ContainerChanged = true;
                 }
@@ -161,6 +320,7 @@ namespace HSTRYDoc
             }
         }
 
+
         private void UiBrowsePrivateKey()
         {
             using var ofd = new OpenFileDialog
@@ -173,17 +333,30 @@ namespace HSTRYDoc
             if (ofd.ShowDialog(this) != DialogResult.OK)
                 return;
 
-            TryLoadMyEcdhPrivateKey(ofd.FileName, showErrors: true);
+            // New path -> drop cached password + loaded keys
+            if (!string.Equals(SelectedEcdhPrivateKeyPath ?? "", ofd.FileName, StringComparison.OrdinalIgnoreCase))
+                _sessionKeyPassword = null;
+
+            SelectedEcdhPrivateKeyPath = ofd.FileName;
+
+            // LAZY: do not load key yet
+            ClearLoadedKeys();
+
             RefreshBlocksList();
             UpdateMyRecipientStatusAndPermissions();
         }
+
+
 
         private void TryLoadMyEcdhPrivateKey(string path, bool showErrors)
         {
             try
             {
+                if (!EnsureSessionPasswordPrompt(out string pw))
+                    return;
+
                 _myEcdhPrivateKey?.Dispose();
-                _myEcdhPrivateKey = HSTRYContainer.EcdhKeyFiles.LoadPrivateKeyPkcs8(path);
+                _myEcdhPrivateKey = LoadEcdhPrivateKeyWithPassword(path, pw);
 
                 byte[] keyId = HSTRYContainer.EcdhKeyFiles.ComputeKeyIdFromPublicKey(_myEcdhPrivateKey);
                 _myKeyIdHex = Convert.ToHexString(keyId);
@@ -192,10 +365,29 @@ namespace HSTRYDoc
 
                 _isOwnerKeyLoaded = IsOwnerEcdhPrivateKey(_myEcdhPrivateKey);
 
-                // Try load signing key automatically if present (owner features require it)
+                // Owner features require signing key (also encrypted)
                 TryLoadSigningKeyForEcdhPath(path, showErrors: showErrors && _isOwnerKeyLoaded);
 
                 UpdateMyKeyUi(path, _myKeyIdHex);
+            }
+            catch (CryptographicException)
+            {
+                // wrong password or corrupted key => force re-prompt
+                _sessionKeyPassword = null;
+
+                _myEcdhPrivateKey?.Dispose();
+                _myEcdhPrivateKey = null;
+                _mySigningPrivateKey?.Dispose();
+                _mySigningPrivateKey = null;
+
+                _myKeyIdHex = null;
+                _isOwnerKeyLoaded = false;
+
+                UpdateMyKeyUi(path, "");
+
+                if (showErrors)
+                    MessageBox.Show(this, "Wrong password or corrupted key file.", "Load private key",
+                        MessageBoxButtons.OK, MessageBoxIcon.Error);
             }
             catch (Exception ex)
             {
@@ -221,6 +413,9 @@ namespace HSTRYDoc
                 _mySigningPrivateKey?.Dispose();
                 _mySigningPrivateKey = null;
 
+                if (!EnsureSessionPasswordPrompt(out string pw))
+                    return;
+
                 string signPath = DeriveSigningPrivateKeyPath(ecdhPrivPath);
                 if (!File.Exists(signPath))
                 {
@@ -235,7 +430,17 @@ namespace HSTRYDoc
                     return;
                 }
 
-                _mySigningPrivateKey = HSTRYContainer.EcdsaKeyFiles.LoadPrivateKeyPkcs8(signPath);
+                _mySigningPrivateKey = HSTRYContainer.EcdsaKeyFiles.LoadPrivateKeyPkcs8Encrypted(signPath, pw);
+            }
+            catch (CryptographicException)
+            {
+                _sessionKeyPassword = null;
+                _mySigningPrivateKey?.Dispose();
+                _mySigningPrivateKey = null;
+
+                if (showErrors)
+                    MessageBox.Show(this, "Wrong password or corrupted signing key file.", "Load signing key",
+                        MessageBoxButtons.OK, MessageBoxIcon.Error);
             }
             catch (Exception ex)
             {
@@ -288,8 +493,6 @@ namespace HSTRYDoc
 
             string ecdhPrivPath = sfd.FileName;
             string ecdhPubPath = Path.ChangeExtension(ecdhPrivPath, ".hstrypub");
-
-            // Optional signing set (only needed if you want this recipient to become owner later)
             string signPrivPath = DeriveSigningPrivateKeyPath(ecdhPrivPath);
             string signPubPath = Path.ChangeExtension(signPrivPath, ".hstrysigpub");
 
@@ -308,18 +511,24 @@ namespace HSTRYDoc
                     return;
             }
 
+            // NEW recipient password (do NOT touch owner session password)
+            if (!EnsureNewPasswordSet(out string pwNew))
+                return;
+
             try
             {
                 using var ecdh = HSTRYContainer.EcdhKeyFiles.CreateNewKeyPair();
                 using var ecdsa = HSTRYContainer.EcdsaKeyFiles.CreateNewKeyPair();
 
-                HSTRYContainer.EcdhKeyFiles.SavePrivateKeyPkcs8(ecdhPrivPath, ecdh);
-                HSTRYContainer.EcdhKeyFiles.SavePublicKeySpki(ecdhPubPath, ecdh);
+                // Private: encrypted
+                HSTRYContainer.EcdhKeyFiles.SavePrivateKeyPkcs8Encrypted(ecdhPrivPath, ecdh, pwNew);
+                HSTRYContainer.EcdsaKeyFiles.SavePrivateKeyPkcs8Encrypted(signPrivPath, ecdsa, pwNew);
 
-                HSTRYContainer.EcdsaKeyFiles.SavePrivateKeyPkcs8(signPrivPath, ecdsa);
+                // Public: plaintext SPKI
+                HSTRYContainer.EcdhKeyFiles.SavePublicKeySpki(ecdhPubPath, ecdh);
                 HSTRYContainer.EcdsaKeyFiles.SavePublicKeySpki(signPubPath, ecdsa);
 
-                var res = MessageBox.Show(
+                var askAdd = MessageBox.Show(
                     this,
                     "Key set created.\n\nDo you want to add the new ECDH public key as a recipient now?",
                     "Create key set",
@@ -327,7 +536,7 @@ namespace HSTRYDoc
                     MessageBoxIcon.Question,
                     MessageBoxDefaultButton.Button1);
 
-                if (res == DialogResult.Yes)
+                if (askAdd == DialogResult.Yes)
                 {
                     if (_myEcdhPrivateKey == null || !_isOwnerKeyLoaded || _mySigningPrivateKey == null)
                     {
@@ -369,12 +578,8 @@ namespace HSTRYDoc
 
         private void UiExportPublicKey()
         {
-            if (_myEcdhPrivateKey == null)
-            {
-                MessageBox.Show(this, "No private key is loaded.", "Export public key",
-                    MessageBoxButtons.OK, MessageBoxIcon.Information);
+            if (!EnsureKeysLoadedForAction(requireOwner: false, requireSigningKey: false, showErrors: true))
                 return;
-            }
 
             string defaultPub = !string.IsNullOrWhiteSpace(SelectedEcdhPrivateKeyPath)
                 ? Path.ChangeExtension(SelectedEcdhPrivateKeyPath, ".hstrypub")
@@ -394,7 +599,7 @@ namespace HSTRYDoc
 
             try
             {
-                HSTRYContainer.EcdhKeyFiles.SavePublicKeySpki(sfd.FileName, _myEcdhPrivateKey);
+                HSTRYContainer.EcdhKeyFiles.SavePublicKeySpki(sfd.FileName, _myEcdhPrivateKey!);
                 MessageBox.Show(this, "Public key exported successfully.", "Export public key",
                     MessageBoxButtons.OK, MessageBoxIcon.Information);
             }
@@ -409,22 +614,15 @@ namespace HSTRYDoc
         // ============================================================
         private async Task UiTransferOwnershipAsync()
         {
-            if (_myEcdhPrivateKey == null)
+            if (_container.Version != HSTRYContainer.CurrentVersion)
             {
-                MessageBox.Show(this, "No private key is loaded.", "Transfer ownership",
-                    MessageBoxButtons.OK, MessageBoxIcon.Information);
+                MessageBox.Show(this, "This container is not V6.", "Transfer ownership",
+                    MessageBoxButtons.OK, MessageBoxIcon.Warning);
                 return;
             }
 
-            if (!_isOwnerKeyLoaded || _mySigningPrivateKey == null)
-            {
-                MessageBox.Show(this,
-                    "Load the current owner ECDH private key and ensure the owner signing key exists (*.hstrysigpriv).",
-                    "Transfer ownership",
-                    MessageBoxButtons.OK,
-                    MessageBoxIcon.Warning);
+            if (!EnsureKeysLoadedForAction(requireOwner: true, requireSigningKey: true, showErrors: true))
                 return;
-            }
 
             var confirm = MessageBox.Show(
                 this,
@@ -454,7 +652,9 @@ namespace HSTRYDoc
             string newSignPrivPath = DeriveSigningPrivateKeyPath(newEcdhPrivPath);
             string newSignPubPath = Path.ChangeExtension(newSignPrivPath, ".hstrysigpub");
 
-            bool overwrite = File.Exists(newEcdhPrivPath) || File.Exists(newEcdhPubPath) || File.Exists(newSignPrivPath) || File.Exists(newSignPubPath);
+            bool overwrite = File.Exists(newEcdhPrivPath) || File.Exists(newEcdhPubPath) ||
+                             File.Exists(newSignPrivPath) || File.Exists(newSignPubPath);
+
             if (overwrite)
             {
                 var res = MessageBox.Show(
@@ -468,6 +668,9 @@ namespace HSTRYDoc
                 if (res != DialogResult.Yes)
                     return;
             }
+
+            if (!EnsureNewPasswordSet(out string pwNewOwner))
+                return;
 
             SetUiBusy(true);
             try
@@ -484,20 +687,19 @@ namespace HSTRYDoc
                             using var newEcdh = HSTRYContainer.EcdhKeyFiles.CreateNewKeyPair();
                             using var newSig = HSTRYContainer.EcdsaKeyFiles.CreateNewKeyPair();
 
-                            HSTRYContainer.EcdhKeyFiles.SavePrivateKeyPkcs8(newEcdhPrivPath, newEcdh);
-                            HSTRYContainer.EcdhKeyFiles.SavePublicKeySpki(newEcdhPubPath, newEcdh);
+                            // Private: encrypted
+                            HSTRYContainer.EcdhKeyFiles.SavePrivateKeyPkcs8Encrypted(newEcdhPrivPath, newEcdh, pwNewOwner);
+                            HSTRYContainer.EcdsaKeyFiles.SavePrivateKeyPkcs8Encrypted(newSignPrivPath, newSig, pwNewOwner);
 
-                            HSTRYContainer.EcdsaKeyFiles.SavePrivateKeyPkcs8(newSignPrivPath, newSig);
+                            // Public: plaintext
+                            HSTRYContainer.EcdhKeyFiles.SavePublicKeySpki(newEcdhPubPath, newEcdh);
                             HSTRYContainer.EcdsaKeyFiles.SavePublicKeySpki(newSignPubPath, newSig);
 
-                            using var newEcdhReload = HSTRYContainer.EcdhKeyFiles.LoadPrivateKeyPkcs8(newEcdhPrivPath);
-                            using var newSigReload = HSTRYContainer.EcdsaKeyFiles.LoadPrivateKeyPkcs8(newSignPrivPath);
-
                             _container.TransferOwnership(
-                                currentOwnerSigningPrivateKey: _mySigningPrivateKey,
+                                currentOwnerSigningPrivateKey: _mySigningPrivateKey!,
                                 currentOwnerEcdhPrivateKey: _myEcdhPrivateKey!,
-                                newOwnerSigningPrivateKey: newSigReload,
-                                newOwnerEcdhPrivateKey: newEcdhReload,
+                                newOwnerSigningPrivateKey: newSig,
+                                newOwnerEcdhPrivateKey: newEcdh,
                                 progress: progress,
                                 token: token);
 
@@ -505,8 +707,10 @@ namespace HSTRYDoc
                         }, token);
                     });
 
-                // Reload dialog state to new owner key (optional UX)
-                TryLoadMyEcdhPrivateKey(newEcdhPrivPath, showErrors: true);
+                // Switch dialog selection to new owner key (do NOT auto prompt; but cache pw so it can load if needed)
+                SelectedEcdhPrivateKeyPath = newEcdhPrivPath;
+                _sessionKeyPassword = pwNewOwner;
+                ClearLoadedKeys();
 
                 RefreshRecipientsList();
                 RefreshBlocksList();
@@ -539,25 +743,14 @@ namespace HSTRYDoc
         // ============================================================
         private void UiAddMyselfAsRecipient()
         {
-            if (_myEcdhPrivateKey == null || string.IsNullOrWhiteSpace(_myKeyIdHex))
-            {
-                MessageBox.Show(this, "No private key is loaded.", "Add myself",
-                    MessageBoxButtons.OK, MessageBoxIcon.Information);
+            if (!EnsureKeysLoadedForAction(requireOwner: true, requireSigningKey: true, showErrors: true))
                 return;
-            }
 
-            if (!_isOwnerKeyLoaded || _mySigningPrivateKey == null)
-            {
-                MessageBox.Show(this,
-                    "Load the owner ECDH private key and ensure the owner signing key exists (*.hstrysigpriv) to modify recipients.",
-                    "Add myself",
-                    MessageBoxButtons.OK,
-                    MessageBoxIcon.Warning);
+            if (string.IsNullOrWhiteSpace(_myKeyIdHex))
                 return;
-            }
 
-            bool included = _container.Recipients.Any(r => Convert.ToHexString(r.KeyId)
-                .Equals(_myKeyIdHex, StringComparison.OrdinalIgnoreCase));
+            bool included = _container.Recipients.Any(r =>
+                Convert.ToHexString(r.KeyId).Equals(_myKeyIdHex!, StringComparison.OrdinalIgnoreCase));
 
             if (included)
             {
@@ -567,8 +760,8 @@ namespace HSTRYDoc
 
             try
             {
-                using var pub = CreatePublicOnlyFromPrivate(_myEcdhPrivateKey);
-                _container.AddRecipient(_mySigningPrivateKey, pub);
+                using var pub = CreatePublicOnlyFromPrivate(_myEcdhPrivateKey!);
+                _container.AddRecipient(_mySigningPrivateKey!, pub);
 
                 ContainerChanged = true;
                 RefreshRecipientsList();
@@ -591,15 +784,8 @@ namespace HSTRYDoc
 
         private void UiAddRecipient()
         {
-            if (_mySigningPrivateKey == null || !_isOwnerKeyLoaded)
-            {
-                MessageBox.Show(this,
-                    "Load the owner ECDH private key and ensure the owner signing key exists (*.hstrysigpriv) to modify recipients.",
-                    "Add recipient",
-                    MessageBoxButtons.OK,
-                    MessageBoxIcon.Warning);
+            if (!EnsureKeysLoadedForAction(requireOwner: true, requireSigningKey: true, showErrors: true))
                 return;
-            }
 
             using var ofd = new OpenFileDialog
             {
@@ -614,7 +800,7 @@ namespace HSTRYDoc
             try
             {
                 using var pub = HSTRYContainer.EcdhKeyFiles.LoadPublicKeySpki(ofd.FileName);
-                _container.AddRecipient(_mySigningPrivateKey, pub);
+                _container.AddRecipient(_mySigningPrivateKey!, pub);
 
                 ContainerChanged = true;
                 RefreshRecipientsList();
@@ -632,15 +818,8 @@ namespace HSTRYDoc
             if (lvwRecipients.SelectedItems.Count == 0)
                 return;
 
-            if (_mySigningPrivateKey == null || !_isOwnerKeyLoaded)
-            {
-                MessageBox.Show(this,
-                    "Load the owner ECDH private key and ensure the owner signing key exists (*.hstrysigpriv) to modify recipients.",
-                    "Remove recipient",
-                    MessageBoxButtons.OK,
-                    MessageBoxIcon.Warning);
+            if (!EnsureKeysLoadedForAction(requireOwner: true, requireSigningKey: true, showErrors: true))
                 return;
-            }
 
             string keyIdHex = lvwRecipients.SelectedItems[0].Text;
 
@@ -657,7 +836,7 @@ namespace HSTRYDoc
 
             try
             {
-                if (_container.RemoveRecipientByKeyIdHex(_mySigningPrivateKey, keyIdHex))
+                if (_container.RemoveRecipientByKeyIdHex(_mySigningPrivateKey!, keyIdHex))
                 {
                     ContainerChanged = true;
                     RefreshRecipientsList();
@@ -879,12 +1058,8 @@ namespace HSTRYDoc
                 return;
             }
 
-            if (_myEcdhPrivateKey == null || !_isOwnerKeyLoaded)
-            {
-                MessageBox.Show(this, "Load the owner ECDH private key to edit block rights.", "Block access",
-                    MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            if (!EnsureKeysLoadedForAction(requireOwner: true, requireSigningKey: false, showErrors: true))
                 return;
-            }
 
             var rec = GetSelectedRecipient();
             if (rec == null) return;
@@ -905,14 +1080,10 @@ namespace HSTRYDoc
 
             try
             {
-                var slot = _container.Blocks[idx].KeySlots.FirstOrDefault(s => s.KeyId.SequenceEqual(rec.KeyId));
-                if (slot != null && (slot.Rights & BlockRights.Read) != 0)
-                    return;
-
                 using var recPub = ECDiffieHellman.Create();
                 recPub.ImportSubjectPublicKeyInfo(rec.PublicKeySpki, out _);
 
-                _container.GrantBlockAccess(_myEcdhPrivateKey, idx, recPub, BlockRights.Read, replaceExisting: true);
+                _container.GrantBlockAccess(_myEcdhPrivateKey!, idx, recPub, BlockRights.Read, replaceExisting: true);
 
                 ContainerChanged = true;
                 RefreshBlocksList();
@@ -932,12 +1103,8 @@ namespace HSTRYDoc
                 return;
             }
 
-            if (_myEcdhPrivateKey == null || !_isOwnerKeyLoaded)
-            {
-                MessageBox.Show(this, "Load the owner ECDH private key to edit block rights.", "Block access",
-                    MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            if (!EnsureKeysLoadedForAction(requireOwner: true, requireSigningKey: false, showErrors: true))
                 return;
-            }
 
             var rec = GetSelectedRecipient();
             if (rec == null) return;
@@ -954,7 +1121,7 @@ namespace HSTRYDoc
                     if (!_container.Blocks[idx].KeySlots.Any(s => s.KeyId.SequenceEqual(rec.KeyId)))
                         continue;
 
-                    _container.RevokeBlockAccess(_myEcdhPrivateKey, idx, keyIdHex);
+                    _container.RevokeBlockAccess(_myEcdhPrivateKey!, idx, keyIdHex);
                 }
 
                 ContainerChanged = true;
@@ -978,12 +1145,8 @@ namespace HSTRYDoc
                 return;
             }
 
-            if (_myEcdhPrivateKey == null || !_isOwnerKeyLoaded)
-            {
-                MessageBox.Show(this, "Load the owner ECDH private key to edit block rights.", "Block access",
-                    MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            if (!EnsureKeysLoadedForAction(requireOwner: true, requireSigningKey: false, showErrors: true))
                 return;
-            }
 
             if (_container.Blocks.Count == 0)
                 return;
@@ -1024,7 +1187,7 @@ namespace HSTRYDoc
 
                         await Task.Run(() =>
                         {
-                            _container.GrantReadAllBlocks(_myEcdhPrivateKey, recPub, progress, token);
+                            _container.GrantReadAllBlocks(_myEcdhPrivateKey!, recPub, progress, token);
                         }, token);
                     });
 
@@ -1057,12 +1220,8 @@ namespace HSTRYDoc
                 return;
             }
 
-            if (_myEcdhPrivateKey == null || !_isOwnerKeyLoaded)
-            {
-                MessageBox.Show(this, "Load the owner ECDH private key to edit block rights.", "Block access",
-                    MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            if (!EnsureKeysLoadedForAction(requireOwner: true, requireSigningKey: false, showErrors: true))
                 return;
-            }
 
             if (_container.Blocks.Count == 0)
                 return;
@@ -1103,7 +1262,7 @@ namespace HSTRYDoc
 
                         await Task.Run(() =>
                         {
-                            _container.GrantWriteAllBlocks(_myEcdhPrivateKey, recPub, progress, token);
+                            _container.GrantWriteAllBlocks(_myEcdhPrivateKey!, recPub, progress, token);
                         }, token);
                     });
 
@@ -1136,12 +1295,8 @@ namespace HSTRYDoc
                 return;
             }
 
-            if (_myEcdhPrivateKey == null || !_isOwnerKeyLoaded)
-            {
-                MessageBox.Show(this, "Load the owner ECDH private key to edit block rights.", "Block access",
-                    MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            if (!EnsureKeysLoadedForAction(requireOwner: true, requireSigningKey: false, showErrors: true))
                 return;
-            }
 
             if (_container.Blocks.Count == 0)
                 return;
@@ -1172,7 +1327,7 @@ namespace HSTRYDoc
                     {
                         await Task.Run(() =>
                         {
-                            _container.RevokeAllBlocks(_myEcdhPrivateKey, keyIdCopy, progress, token);
+                            _container.RevokeAllBlocks(_myEcdhPrivateKey!, keyIdCopy, progress, token);
                         }, token);
                     });
 
@@ -1199,11 +1354,17 @@ namespace HSTRYDoc
         protected override void OnFormClosed(FormClosedEventArgs e)
         {
             base.OnFormClosed(e);
+
             _myEcdhPrivateKey?.Dispose();
             _myEcdhPrivateKey = null;
 
             _mySigningPrivateKey?.Dispose();
             _mySigningPrivateKey = null;
+
+            _sessionKeyPassword = null;
         }
+
+
+
     }
 }

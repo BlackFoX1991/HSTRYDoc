@@ -26,6 +26,10 @@ namespace HSTRYDoc
 {
     public sealed class HSTRYContainer
     {
+
+        public bool IsOpenedAsOwner
+    => _activeKeyId != null && _activeKeyId.Length == 32 && _activeKeyId.SequenceEqual(OwnerKeyId);
+
         // =========================
         // V6 constants
         // =========================
@@ -86,6 +90,14 @@ namespace HSTRYDoc
 
         private HSTRYContainer() { }
 
+        public static HSTRYContainer LoadWithPrivateKeyFile(string containerPath, ECDiffieHellman myEcdhPrivateKey)
+        {
+            using var fs = new FileStream(containerPath, FileMode.Open, FileAccess.Read, FileShare.Read, bufferSize: 1 << 20);
+            using var bs = new BufferedStream(fs, 1 << 20);
+            return LoadWithPrivateKey(bs, myEcdhPrivateKey);
+        }
+
+
         private Encoding GetContainerEncoding()
             => _encCache ??= Encoding.GetEncoding(EncodingWebName);
 
@@ -94,6 +106,33 @@ namespace HSTRYDoc
         // ============================================================
         public static class EcdhKeyFiles
         {
+
+            public static void SavePrivateKeyPkcs8Encrypted(string path, ECDiffieHellman ecdh, string password)
+            {
+                if (string.IsNullOrEmpty(password))
+                    throw new ArgumentException("Password required.", nameof(password));
+
+                var pbe = new PbeParameters(
+                    PbeEncryptionAlgorithm.Aes256Cbc,
+                    HashAlgorithmName.SHA256,
+                    iterationCount: 300_000);
+
+                byte[] enc = ecdh.ExportEncryptedPkcs8PrivateKey(password, pbe);
+                File.WriteAllBytes(path, enc); // binary
+            }
+
+            public static ECDiffieHellman LoadPrivateKeyPkcs8Encrypted(string path, string password)
+            {
+                if (string.IsNullOrEmpty(password))
+                    throw new ArgumentException("Password required.", nameof(password));
+
+                byte[] enc = File.ReadAllBytes(path);
+
+                var e = ECDiffieHellman.Create();
+                e.ImportEncryptedPkcs8PrivateKey(password, enc, out _);
+                return e;
+            }
+
             // Public key file: Base64(SPKI)
             public static void SavePublicKeySpki(string path, ECDiffieHellman ecdh)
             {
@@ -143,6 +182,33 @@ namespace HSTRYDoc
 
         public static class EcdsaKeyFiles
         {
+
+            public static void SavePrivateKeyPkcs8Encrypted(string path, ECDsa ecdsa, string password)
+            {
+                if (string.IsNullOrEmpty(password))
+                    throw new ArgumentException("Password required.", nameof(password));
+
+                var pbe = new PbeParameters(
+                    PbeEncryptionAlgorithm.Aes256Cbc,
+                    HashAlgorithmName.SHA256,
+                    iterationCount: 300_000);
+
+                byte[] enc = ecdsa.ExportEncryptedPkcs8PrivateKey(password, pbe);
+                File.WriteAllBytes(path, enc); // binary
+            }
+
+            public static ECDsa LoadPrivateKeyPkcs8Encrypted(string path, string password)
+            {
+                if (string.IsNullOrEmpty(password))
+                    throw new ArgumentException("Password required.", nameof(password));
+
+                byte[] enc = File.ReadAllBytes(path);
+
+                var s = ECDsa.Create();
+                s.ImportEncryptedPkcs8PrivateKey(password, enc, out _);
+                return s;
+            }
+
             public static void SavePublicKeySpki(string path, ECDsa ecdsa)
             {
                 byte[] spki = ecdsa.ExportSubjectPublicKeyInfo();
@@ -180,6 +246,8 @@ namespace HSTRYDoc
                 return ECDsa.Create(ECCurve.NamedCurves.nistP384);
             }
         }
+
+
 
         // ============================================================
         // Create / Load (V6 only)
@@ -626,6 +694,8 @@ namespace HSTRYDoc
 
             return removed > 0;
         }
+
+
 
         // ============================================================
         // Block access control (V6) - owner must provide ECDH private key

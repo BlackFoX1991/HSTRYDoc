@@ -10,6 +10,9 @@ namespace HSTRYDoc
 
         private bool _closingAfterSave = false;
 
+        private string? _sessionKeyPassword;
+
+
         private enum KeyResolveOutcome
         {
             Success,     // session key chosen
@@ -95,7 +98,11 @@ namespace HSTRYDoc
             // Remember current key path to detect changes
             string? oldKeyPath = _ecdhPrivateKeyPath;
 
-            using var dlg = new KeyManagerDialog(_container, _containerPath!, _ecdhPrivateKeyPath);
+            using var dlg = new KeyManagerDialog(
+                container: _container,
+                containerPath: _containerPath!,
+                currentEcdhPrivateKeyPath: _ecdhPrivateKeyPath);
+
             if (dlg.ShowDialog(this) != DialogResult.OK)
                 return;
 
@@ -144,6 +151,9 @@ namespace HSTRYDoc
 
         private async Task<bool> ReloadContainerWithPrivateKeyAsync(string containerPath, string ecdhPrivateKeyPath, int keepSelectedIndex)
         {
+            if (!EnsureSessionPasswordPrompt(out string pw))
+                return false;
+
             try
             {
                 HSTRYContainer loaded = await reporterDiag.RunAsync(
@@ -152,7 +162,16 @@ namespace HSTRYDoc
                     work: async (progress, token) =>
                     {
                         progress.Report(new UiProgress { Message = "Reloading container ", Indeterminate = true });
-                        return await Task.Run(() => HSTRYContainer.LoadWithPrivateKeyFile(containerPath, ecdhPrivateKeyPath), token);
+
+                        return await Task.Run(() =>
+                        {
+                            using var ecdh = LoadEcdhPrivateKeyWithPassword(ecdhPrivateKeyPath, pw);
+
+                            using var fs = new FileStream(containerPath, FileMode.Open, FileAccess.Read, FileShare.Read, bufferSize: 1 << 20);
+                            using var bs = new BufferedStream(fs, 1 << 20);
+
+                            return HSTRYContainer.LoadWithPrivateKey(bs, ecdh);
+                        }, token);
                     });
 
                 CancelHashWorkers();
@@ -185,6 +204,13 @@ namespace HSTRYDoc
                 RebuildAutoCompleteWordsFromEditor();
                 return true;
             }
+            catch (CryptographicException)
+            {
+                _sessionKeyPassword = null;
+                MessageBox.Show(this, "Wrong password or corrupted key file.", "Reload container",
+                    MessageBoxButtons.OK, MessageBoxIcon.Error);
+                return false;
+            }
             catch (OperationCanceledException)
             {
                 return false;
@@ -204,18 +230,22 @@ namespace HSTRYDoc
             if (_container == null) return false;
             if (string.IsNullOrWhiteSpace(_ecdhPrivateKeyPath) || !File.Exists(_ecdhPrivateKeyPath)) return false;
 
+            if (!EnsureSessionPasswordPrompt(out string pw))
+                return false;
+
             try
             {
-                using var ecdh = HSTRYContainer.EcdhKeyFiles.LoadPrivateKeyPkcs8(_ecdhPrivateKeyPath);
+                using var ecdh = LoadEcdhPrivateKeyWithPassword(_ecdhPrivateKeyPath!, pw);
                 byte[] spki = ecdh.ExportSubjectPublicKeyInfo();
                 return spki.SequenceEqual(_container.OwnerEcdhPublicKeySpki);
             }
             catch
             {
+                // wrong password / corrupt key -> force re-prompt next time
+                _sessionKeyPassword = null;
                 return false;
             }
         }
-
 
         // ...
 
@@ -608,6 +638,8 @@ namespace HSTRYDoc
         {
             ecdhPrivateKeyPath = string.Empty;
 
+            string? old = _ecdhPrivateKeyPath;
+
             // 1) Optional drive scan
             if (_appState.UseDriveKeySearch)
             {
@@ -619,6 +651,10 @@ namespace HSTRYDoc
                 {
                     _ecdhPrivateKeyPath = sessionKey; // session-only
                     ecdhPrivateKeyPath = sessionKey;
+
+                    if (!string.Equals(old, _ecdhPrivateKeyPath, StringComparison.OrdinalIgnoreCase))
+                        _sessionKeyPassword = null; // password likely differs
+
                     return true;
                 }
             }
@@ -631,6 +667,10 @@ namespace HSTRYDoc
                 return false;
 
             ecdhPrivateKeyPath = _ecdhPrivateKeyPath!;
+
+            if (!string.Equals(old, _ecdhPrivateKeyPath, StringComparison.OrdinalIgnoreCase))
+                _sessionKeyPassword = null;
+
             return true;
         }
 
@@ -922,6 +962,9 @@ namespace HSTRYDoc
             if (!ResolvePrivateKeyInteractive(path, out string ecdhPrivPath))
                 return false;
 
+            if (!EnsureSessionPasswordPrompt(out string pw))
+                return false;
+
             try
             {
                 HSTRYContainer loaded = await reporterDiag.RunAsync(
@@ -930,7 +973,16 @@ namespace HSTRYDoc
                     work: async (progress, token) =>
                     {
                         progress.Report(new UiProgress { Message = "Opening container ", Indeterminate = true });
-                        return await Task.Run(() => HSTRYContainer.LoadWithPrivateKeyFile(path, ecdhPrivPath), token);
+
+                        return await Task.Run(() =>
+                        {
+                            using var ecdh = LoadEcdhPrivateKeyWithPassword(ecdhPrivPath, pw);
+
+                            using var fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read, bufferSize: 1 << 20);
+                            using var bs = new BufferedStream(fs, 1 << 20);
+
+                            return HSTRYContainer.LoadWithPrivateKey(bs, ecdh);
+                        }, token);
                     });
 
                 CancelHashWorkers();
@@ -953,6 +1005,13 @@ namespace HSTRYDoc
 
                 RebuildAutoCompleteWordsFromEditor();
                 return true;
+            }
+            catch (CryptographicException)
+            {
+                _sessionKeyPassword = null;
+                MessageBox.Show(this, "Wrong password or corrupted key file.", "Open container",
+                    MessageBoxButtons.OK, MessageBoxIcon.Error);
+                return false;
             }
             catch (InvalidDataException ex) when (ex.Message.Contains("Unsupported container version", StringComparison.OrdinalIgnoreCase))
             {
@@ -1159,6 +1218,9 @@ namespace HSTRYDoc
             _rtfAutoComplete?.Dispose();
 
             CancelHashWorkers();
+
+            _sessionKeyPassword = null;
+
             _container?.CloseKeyMaterial();
         }
 
@@ -1177,6 +1239,7 @@ namespace HSTRYDoc
                 return false;
             }
 
+            // signing key must exist (encrypted too)
             string signPath = DeriveSigningPrivateKeyPath(_ecdhPrivateKeyPath);
             if (!File.Exists(signPath))
             {
@@ -1187,6 +1250,10 @@ namespace HSTRYDoc
                     MessageBoxIcon.Error);
                 return false;
             }
+
+            // Need password
+            if (!EnsureSessionPasswordPrompt(out string pw))
+                return false;
 
             using SaveFileDialog sfd = new()
             {
@@ -1213,8 +1280,8 @@ namespace HSTRYDoc
 
                         return await Task.Run(() =>
                         {
-                            using var ownerEcdh = HSTRYContainer.EcdhKeyFiles.LoadPrivateKeyPkcs8(_ecdhPrivateKeyPath!);
-                            using var ownerSig = HSTRYContainer.EcdsaKeyFiles.LoadPrivateKeyPkcs8(signPath);
+                            using var ownerEcdh = LoadEcdhPrivateKeyWithPassword(_ecdhPrivateKeyPath!, pw);
+                            using var ownerSig = LoadEcdsaSigningKeyWithPassword(_ecdhPrivateKeyPath!, pw);
 
                             HSTRYContainer c = HSTRYContainer.CreateNewForRecipients(
                                 ownerSigningPrivateKey: ownerSig,
@@ -1247,6 +1314,13 @@ namespace HSTRYDoc
 
                 RebuildAutoCompleteWordsFromEditor();
                 return true;
+            }
+            catch (CryptographicException)
+            {
+                _sessionKeyPassword = null;
+                MessageBox.Show(this, "Wrong password or corrupted key file.", "Create container",
+                    MessageBoxButtons.OK, MessageBoxIcon.Error);
+                return false;
             }
             catch (OperationCanceledException)
             {
@@ -3332,15 +3406,20 @@ namespace HSTRYDoc
                     return false;
             }
 
+            if (!EnsureNewPasswordSet(out string pw))
+                return false;
+
             try
             {
                 using var ecdh = HSTRYContainer.EcdhKeyFiles.CreateNewKeyPair();
                 using var ecdsa = HSTRYContainer.EcdsaKeyFiles.CreateNewKeyPair();
 
-                HSTRYContainer.EcdhKeyFiles.SavePrivateKeyPkcs8(ecdhPrivPath, ecdh);
-                HSTRYContainer.EcdhKeyFiles.SavePublicKeySpki(ecdhPubPath, ecdh);
+                // PRIVATE: encrypted (binary)
+                HSTRYContainer.EcdhKeyFiles.SavePrivateKeyPkcs8Encrypted(ecdhPrivPath, ecdh, pw);
+                HSTRYContainer.EcdsaKeyFiles.SavePrivateKeyPkcs8Encrypted(signPrivPath, ecdsa, pw);
 
-                HSTRYContainer.EcdsaKeyFiles.SavePrivateKeyPkcs8(signPrivPath, ecdsa);
+                // PUBLIC: unchanged (Base64 SPKI)
+                HSTRYContainer.EcdhKeyFiles.SavePublicKeySpki(ecdhPubPath, ecdh);
                 HSTRYContainer.EcdsaKeyFiles.SavePublicKeySpki(signPubPath, ecdsa);
 
                 _ecdhPrivateKeyPath = ecdhPrivPath;
@@ -3363,6 +3442,7 @@ namespace HSTRYDoc
             }
             catch (Exception ex)
             {
+                _sessionKeyPassword = null;
                 MessageBox.Show(this, ex.Message, "Create key set", MessageBoxButtons.OK, MessageBoxIcon.Error);
                 return false;
             }
@@ -3383,6 +3463,9 @@ namespace HSTRYDoc
             string chosen = ofd.FileName;
             if (string.IsNullOrWhiteSpace(chosen) || !File.Exists(chosen))
                 return false;
+
+            if (!string.Equals(_ecdhPrivateKeyPath ?? "", chosen, StringComparison.OrdinalIgnoreCase))
+                _sessionKeyPassword = null; // password likely differs
 
             _ecdhPrivateKeyPath = chosen;
             _appState.PrivateKeyPath = chosen;
@@ -3706,6 +3789,72 @@ namespace HSTRYDoc
             rtfMainText.ZoomFactor = z;
             lblScaleLabel.Text = $"{rtfScaleBar.Value}%";
         }
+
+        // ============================================================
+        // Password helpers (session-cached)
+        // ============================================================
+        // ============================================================
+        // Password helpers (session-cached)
+        // ============================================================
+        private bool EnsureSessionPasswordPrompt(out string password)
+        {
+            password = _sessionKeyPassword ?? string.Empty;
+
+            if (!string.IsNullOrEmpty(_sessionKeyPassword))
+                return true;
+
+            string? pw = PasswordDialog.ShowPassword(
+                this,
+                "Unlock key",
+                "Enter password:",
+                PasswordDialog.PasswordDialogMode.Prompt);
+
+            if (pw == null)
+                return false;
+
+            if (string.IsNullOrWhiteSpace(pw))
+                return false;
+
+            _sessionKeyPassword = pw;
+            password = pw;
+            return true;
+        }
+
+        private bool EnsureNewPasswordSet(out string password)
+        {
+            password = string.Empty;
+
+            string? pw = PasswordDialog.ShowPassword(
+                this,
+                "Set password",
+                "Set a password for your private keys:",
+                PasswordDialog.PasswordDialogMode.SetNew);
+
+            if (pw == null)
+                return false;
+
+            if (string.IsNullOrWhiteSpace(pw))
+                return false;
+
+            _sessionKeyPassword = pw; // cache in session
+            password = pw;
+            return true;
+        }
+
+        private ECDiffieHellman LoadEcdhPrivateKeyWithPassword(string ecdhPrivPath, string password)
+        {
+            return HSTRYContainer.EcdhKeyFiles.LoadPrivateKeyPkcs8Encrypted(ecdhPrivPath, password);
+        }
+
+        private ECDsa LoadEcdsaSigningKeyWithPassword(string ecdhPrivPath, string password)
+        {
+            string signPath = DeriveSigningPrivateKeyPath(ecdhPrivPath);
+            if (!File.Exists(signPath))
+                throw new FileNotFoundException("Owner signing key is missing.", signPath);
+
+            return HSTRYContainer.EcdsaKeyFiles.LoadPrivateKeyPkcs8Encrypted(signPath, password);
+        }
+
 
         private void ResetEditorScaleTo100()
         {
