@@ -1,15 +1,5 @@
-﻿// BlockAuth.cs (V5 compatible)
-// V2 AD (legacy): version + index + created + modified + prevHash + titleLen + title(utf8)
-// V3 AD (legacy): version + purpose + index + created + modified + prevHash
-// V4 AD: version + purpose + index + created + modified + prevHash + accessHash(32)
-// V5 AD (ECC container): SAME AS V4:
-//     version + purpose + index + created + modified + prevHash + accessHash(32)
-//
-// Notes:
-// - In V5, title is encrypted, so it is NOT embedded plaintext in AD.
-// - purpose separates title/body so ciphertexts cannot be swapped.
-// - accessHash binds KeySlots (KeyId + Rights + Alg + WrappedBek) into AEAD authentication,
-//   preventing slot tampering without re-encryption.
+﻿// BlockAuth.cs
+// V4/V5/V6 AD (access-controlled): version + purpose + index + created + modified + prevHash + accessHash(32)
 
 using System;
 using System.Buffers.Binary;
@@ -23,9 +13,12 @@ namespace HSTRYDoc
     {
         public static byte[] BuildAssociatedData(byte containerVersion, Block b, byte purpose)
         {
+            // If you still keep legacy versions around, leave those branches;
+            // otherwise you can remove V2/V3 entirely. V6 needs to be supported here.
+
             if (containerVersion == 2)
             {
-                // Legacy V2: bind chain + metadata + plaintext title into AEAD authentication.
+                // Legacy V2 (optional legacy support)
                 byte[] titleBytes = Encoding.UTF8.GetBytes(b.Title ?? string.Empty);
                 int len = 1 + 4 + 8 + 8 + Crypto.Sha256Size + 2 + titleBytes.Length;
 
@@ -55,7 +48,7 @@ namespace HSTRYDoc
 
             if (containerVersion == 3)
             {
-                // V3: version + purpose + index + created + modified + prevHash
+                // Legacy V3 (optional legacy support)
                 int lenV3 = 1 + 1 + 4 + 8 + 8 + Crypto.Sha256Size;
 
                 byte[] adV3 = new byte[lenV3];
@@ -77,37 +70,37 @@ namespace HSTRYDoc
                 return adV3;
             }
 
-            // V4/V5: version + purpose + index + created + modified + prevHash + accessHash(32)
-            if (containerVersion != 4 && containerVersion != 5)
+            // V4/V5/V6: version + purpose + index + created + modified + prevHash + accessHash
+            if (containerVersion != 4 && containerVersion != 5 && containerVersion != 6)
                 throw new InvalidOperationException("Unsupported container version for AD.");
 
             byte[] accessHash = ComputeAccessHashV4(b);
 
-            int lenV4 = 1 + 1 + 4 + 8 + 8 + Crypto.Sha256Size + Crypto.Sha256Size;
+            int lenVx = 1 + 1 + 4 + 8 + 8 + Crypto.Sha256Size + Crypto.Sha256Size;
 
-            byte[] adV4 = new byte[lenV4];
+            byte[] adVx = new byte[lenVx];
             int q = 0;
 
-            adV4[q++] = containerVersion; // binds exact version (4 vs 5)
-            adV4[q++] = purpose;
+            adVx[q++] = containerVersion;
+            adVx[q++] = purpose;
 
-            BinaryPrimitives.WriteInt32LittleEndian(adV4.AsSpan(q, 4), b.Index);
+            BinaryPrimitives.WriteInt32LittleEndian(adVx.AsSpan(q, 4), b.Index);
             q += 4;
 
-            BinaryPrimitives.WriteInt64LittleEndian(adV4.AsSpan(q, 8), b.CreatedUtc.UtcTicks);
+            BinaryPrimitives.WriteInt64LittleEndian(adVx.AsSpan(q, 8), b.CreatedUtc.UtcTicks);
             q += 8;
 
-            BinaryPrimitives.WriteInt64LittleEndian(adV4.AsSpan(q, 8), b.ModifiedUtc.UtcTicks);
+            BinaryPrimitives.WriteInt64LittleEndian(adVx.AsSpan(q, 8), b.ModifiedUtc.UtcTicks);
             q += 8;
 
-            b.PrevHash.AsSpan().CopyTo(adV4.AsSpan(q, Crypto.Sha256Size));
+            b.PrevHash.AsSpan().CopyTo(adVx.AsSpan(q, Crypto.Sha256Size));
             q += Crypto.Sha256Size;
 
-            accessHash.AsSpan().CopyTo(adV4.AsSpan(q, Crypto.Sha256Size));
-            return adV4;
+            accessHash.AsSpan().CopyTo(adVx.AsSpan(q, Crypto.Sha256Size));
+            return adVx;
         }
 
-        // Keep name for compatibility; in V5 this still applies.
+        // Keep name for compatibility: still correct in V6.
         public static byte[] ComputeAccessHashV4(Block b)
         {
             using var ms = new MemoryStream();
