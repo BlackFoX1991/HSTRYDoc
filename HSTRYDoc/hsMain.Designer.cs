@@ -328,22 +328,23 @@
             mainshadowPanel.Location = new Point(15, 15);
             mainshadowPanel.MaxAlpha = 140;
             mainshadowPanel.Name = "mainshadowPanel";
-            mainshadowPanel.Padding = new Padding(5, 5, 7, 7);
-            mainshadowPanel.ShadowOffsetX = 2;
-            mainshadowPanel.ShadowOffsetY = 2;
-            mainshadowPanel.ShadowSize = 5;
+            mainshadowPanel.Padding = new Padding(8);
+            mainshadowPanel.ShadowOffsetX = 0;
+            mainshadowPanel.ShadowOffsetY = 0;
+            mainshadowPanel.ShadowSize = 8;
             mainshadowPanel.Size = new Size(608, 528);
             mainshadowPanel.TabIndex = 3;
             // 
             // rtfMainText
             // 
+            rtfMainText.AcceptsTab = true;
             rtfMainText.BorderStyle = BorderStyle.None;
             rtfMainText.ContextMenuStrip = ctxRtf;
             rtfMainText.Dock = DockStyle.Fill;
             rtfMainText.EnableAutoDragDrop = true;
-            rtfMainText.Location = new Point(5, 5);
+            rtfMainText.Location = new Point(8, 8);
             rtfMainText.Name = "rtfMainText";
-            rtfMainText.Size = new Size(596, 494);
+            rtfMainText.Size = new Size(592, 490);
             rtfMainText.TabIndex = 0;
             rtfMainText.Text = "";
             // 
@@ -443,9 +444,9 @@
             pnlScales.Controls.Add(rtfScaleBar);
             pnlScales.Controls.Add(panel3);
             pnlScales.Dock = DockStyle.Bottom;
-            pnlScales.Location = new Point(5, 499);
+            pnlScales.Location = new Point(8, 498);
             pnlScales.Name = "pnlScales";
-            pnlScales.Size = new Size(596, 22);
+            pnlScales.Size = new Size(592, 22);
             pnlScales.TabIndex = 2;
             // 
             // rtfScaleBar
@@ -454,7 +455,7 @@
             rtfScaleBar.BackColor = Color.White;
             rtfScaleBar.Dock = DockStyle.Right;
             rtfScaleBar.LargeChange = 25;
-            rtfScaleBar.Location = new Point(330, 0);
+            rtfScaleBar.Location = new Point(326, 0);
             rtfScaleBar.Maximum = 400;
             rtfScaleBar.Minimum = 25;
             rtfScaleBar.Name = "rtfScaleBar";
