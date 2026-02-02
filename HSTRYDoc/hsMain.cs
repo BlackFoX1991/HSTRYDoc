@@ -2291,11 +2291,136 @@ namespace HSTRYDoc
             return snippet;
         }
 
+        private static void IndentSelectionByTab(RichTextBox rtb)
+        {
+            int selStart = rtb.SelectionStart;
+            int selLen = rtb.SelectionLength;
+
+            // No selection -> insert a tab at caret
+            if (selLen == 0)
+            {
+                rtb.SelectedText = "\t";
+                return;
+            }
+
+            int firstLine = rtb.GetLineFromCharIndex(selStart);
+
+            // Use last selected character so "end at line start" doesn't include next line
+            int lastChar = Math.Max(selStart, selStart + selLen - 1);
+            int lastLine = rtb.GetLineFromCharIndex(lastChar);
+
+            var lineStarts = new List<int>();
+            for (int line = firstLine; line <= lastLine; line++)
+                lineStarts.Add(rtb.GetFirstCharIndexFromLine(line));
+
+            // Insert from bottom to top so indices stay stable
+            for (int i = lineStarts.Count - 1; i >= 0; i--)
+            {
+                int idx = lineStarts[i];
+                if (idx < 0 || idx > rtb.TextLength) continue;
+
+                rtb.Select(idx, 0);
+                rtb.SelectedText = "\t";
+            }
+
+            int insertedTotal = lineStarts.Count;
+            int insertedBeforeStart = lineStarts.Count(x => x <= selStart);
+
+            // Restore selection (keep original content selected, shifted)
+            int newStart = selStart + insertedBeforeStart;
+            int newLen = selLen + insertedTotal;
+            rtb.Select(newStart, newLen);
+        }
+
+        private static void UnindentSelectionByTab(RichTextBox rtb)
+        {
+            int selStart = rtb.SelectionStart;
+            int selLen = rtb.SelectionLength;
+
+            // No selection -> try remove a tab just before caret
+            if (selLen == 0)
+            {
+                if (selStart <= 0) return;
+
+                char prev = rtb.Text[selStart - 1];
+                if (prev == '\t')
+                {
+                    rtb.Select(selStart - 1, 1);
+                    rtb.SelectedText = "";
+                    rtb.Select(selStart - 1, 0);
+                }
+                return;
+            }
+
+            int firstLine = rtb.GetLineFromCharIndex(selStart);
+            int lastChar = Math.Max(selStart, selStart + selLen - 1);
+            int lastLine = rtb.GetLineFromCharIndex(lastChar);
+
+            var lineStarts = new List<int>();
+            for (int line = firstLine; line <= lastLine; line++)
+                lineStarts.Add(rtb.GetFirstCharIndexFromLine(line));
+
+            int removedTotal = 0;
+            int removedBeforeStart = 0;
+
+            // Remove from bottom to top
+            for (int i = lineStarts.Count - 1; i >= 0; i--)
+            {
+                int idx = lineStarts[i];
+                if (idx < 0 || idx >= rtb.TextLength) continue;
+
+                // Remove either a leading tab or 4 leading spaces
+                if (rtb.Text[idx] == '\t')
+                {
+                    rtb.Select(idx, 1);
+                    rtb.SelectedText = "";
+                    removedTotal += 1;
+                    if (idx < selStart) removedBeforeStart += 1;
+                }
+                else
+                {
+                    // Optional: treat 4 spaces as one indent level
+                    int max = Math.Min(4, rtb.TextLength - idx);
+                    int spaces = 0;
+                    while (spaces < max && rtb.Text[idx + spaces] == ' ') spaces++;
+
+                    if (spaces > 0)
+                    {
+                        rtb.Select(idx, spaces);
+                        rtb.SelectedText = "";
+                        removedTotal += spaces;
+                        if (idx < selStart) removedBeforeStart += spaces;
+                    }
+                }
+            }
+
+            int newStart = Math.Max(0, selStart - removedBeforeStart);
+            int newLen = Math.Max(0, selLen - removedTotal);
+            rtb.Select(newStart, newLen);
+        }
+
+
         // ============================================================
         // RTF Formatting + Clipboard + Shortcuts
         // ============================================================
         private void RtfMainText_KeyDown(object? sender, KeyEventArgs e)
         {
+            // TAB / Shift+TAB: indent / unindent selected lines (keep text)
+            if (e.KeyCode == Keys.Tab && !e.Control && !e.Alt)
+            {
+                // Keep default behavior inside tables (cell navigation)
+                if (!IsCaretInTable(rtfMainText))
+                {
+                    if (e.Shift) UnindentSelectionByTab(rtfMainText);
+                    else IndentSelectionByTab(rtfMainText);
+
+                    e.Handled = true;
+                    e.SuppressKeyPress = true;
+                    return;
+                }
+            }
+
+            // Ctrl+F: search in block
             if (e.Control && !e.Shift && e.KeyCode == Keys.F)
             {
                 UiSearchInBlock();
@@ -2303,6 +2428,7 @@ namespace HSTRYDoc
                 return;
             }
 
+            // Ctrl+Shift+F: search in container
             if (e.Control && e.Shift && e.KeyCode == Keys.F)
             {
                 _ = UiSearchInContainerAsync();
@@ -2310,14 +2436,17 @@ namespace HSTRYDoc
                 return;
             }
 
+            // F3: find next
             if (!e.Control && !e.Shift && e.KeyCode == Keys.F3)
             {
                 if (!string.IsNullOrWhiteSpace(_lastFindText))
                     FindNextInEditor(_lastFindText, _lastFindMatchCase, _lastFindWholeWord, _lastFindWrap);
 
                 e.Handled = true;
+                return;
             }
         }
+
 
         private void UpdateRtfUiFromSelection()
         {
