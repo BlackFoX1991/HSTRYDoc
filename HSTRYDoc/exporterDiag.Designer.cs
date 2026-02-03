@@ -45,6 +45,9 @@
             colSize = new ColumnHeader();
             colCreated = new ColumnHeader();
             colChanged = new ColumnHeader();
+            tsExpoFiles = new ToolStrip();
+            tsSelectAllBlocks = new ToolStripButton();
+            tsDiscardSelection = new ToolStripButton();
             label1 = new Label();
             panel2 = new Panel();
             prgExport = new ProgressBar();
@@ -55,6 +58,7 @@
             grpOutput.SuspendLayout();
             grpFileFormat.SuspendLayout();
             panel3.SuspendLayout();
+            tsExpoFiles.SuspendLayout();
             panel2.SuspendLayout();
             SuspendLayout();
             // 
@@ -64,9 +68,8 @@
             panel1.Controls.Add(panel3);
             panel1.Dock = DockStyle.Fill;
             panel1.Location = new Point(0, 0);
-            panel1.Margin = new Padding(3, 4, 3, 4);
             panel1.Name = "panel1";
-            panel1.Size = new Size(768, 416);
+            panel1.Size = new Size(672, 312);
             panel1.TabIndex = 0;
             // 
             // panel4
@@ -74,11 +77,10 @@
             panel4.Controls.Add(grpOutput);
             panel4.Controls.Add(grpFileFormat);
             panel4.Dock = DockStyle.Fill;
-            panel4.Location = new Point(386, 0);
-            panel4.Margin = new Padding(3, 4, 3, 4);
+            panel4.Location = new Point(338, 0);
             panel4.Name = "panel4";
-            panel4.Padding = new Padding(17, 20, 17, 20);
-            panel4.Size = new Size(382, 416);
+            panel4.Padding = new Padding(15);
+            panel4.Size = new Size(334, 312);
             panel4.TabIndex = 1;
             // 
             // grpOutput
@@ -86,11 +88,10 @@
             grpOutput.Controls.Add(txtOutput);
             grpOutput.Controls.Add(btnChoose);
             grpOutput.Dock = DockStyle.Fill;
-            grpOutput.Location = new Point(17, 271);
-            grpOutput.Margin = new Padding(3, 4, 3, 4);
+            grpOutput.Location = new Point(15, 203);
             grpOutput.Name = "grpOutput";
-            grpOutput.Padding = new Padding(29, 33, 29, 33);
-            grpOutput.Size = new Size(348, 125);
+            grpOutput.Padding = new Padding(25);
+            grpOutput.Size = new Size(304, 94);
             grpOutput.TabIndex = 1;
             grpOutput.TabStop = false;
             grpOutput.Text = "Output";
@@ -99,22 +100,20 @@
             // 
             txtOutput.BorderStyle = BorderStyle.FixedSingle;
             txtOutput.Dock = DockStyle.Fill;
-            txtOutput.Location = new Point(29, 53);
-            txtOutput.Margin = new Padding(3, 4, 3, 4);
+            txtOutput.Location = new Point(25, 41);
             txtOutput.Multiline = true;
             txtOutput.Name = "txtOutput";
             txtOutput.ReadOnly = true;
-            txtOutput.Size = new Size(258, 39);
+            txtOutput.Size = new Size(226, 28);
             txtOutput.TabIndex = 0;
             // 
             // btnChoose
             // 
             btnChoose.Dock = DockStyle.Right;
             btnChoose.FlatStyle = FlatStyle.Popup;
-            btnChoose.Location = new Point(287, 53);
-            btnChoose.Margin = new Padding(3, 4, 3, 4);
+            btnChoose.Location = new Point(251, 41);
             btnChoose.Name = "btnChoose";
-            btnChoose.Size = new Size(32, 39);
+            btnChoose.Size = new Size(28, 28);
             btnChoose.TabIndex = 1;
             btnChoose.Text = "...";
             btnChoose.UseVisualStyleBackColor = true;
@@ -125,11 +124,10 @@
             grpFileFormat.Controls.Add(radioRtf);
             grpFileFormat.Controls.Add(radioPdf);
             grpFileFormat.Dock = DockStyle.Top;
-            grpFileFormat.Location = new Point(17, 20);
-            grpFileFormat.Margin = new Padding(3, 4, 3, 4);
+            grpFileFormat.Location = new Point(15, 15);
             grpFileFormat.Name = "grpFileFormat";
-            grpFileFormat.Padding = new Padding(29, 33, 29, 33);
-            grpFileFormat.Size = new Size(348, 251);
+            grpFileFormat.Padding = new Padding(25);
+            grpFileFormat.Size = new Size(304, 188);
             grpFileFormat.TabIndex = 0;
             grpFileFormat.TabStop = false;
             grpFileFormat.Text = "File format...";
@@ -137,10 +135,9 @@
             // radioTxt
             // 
             radioTxt.Dock = DockStyle.Top;
-            radioTxt.Location = new Point(29, 131);
-            radioTxt.Margin = new Padding(3, 4, 3, 4);
+            radioTxt.Location = new Point(25, 99);
             radioTxt.Name = "radioTxt";
-            radioTxt.Size = new Size(290, 39);
+            radioTxt.Size = new Size(254, 29);
             radioTxt.TabIndex = 2;
             radioTxt.TabStop = true;
             radioTxt.Text = "Textfile ( TXT )";
@@ -149,10 +146,9 @@
             // radioRtf
             // 
             radioRtf.Dock = DockStyle.Top;
-            radioRtf.Location = new Point(29, 92);
-            radioRtf.Margin = new Padding(3, 4, 3, 4);
+            radioRtf.Location = new Point(25, 70);
             radioRtf.Name = "radioRtf";
-            radioRtf.Size = new Size(290, 39);
+            radioRtf.Size = new Size(254, 29);
             radioRtf.TabIndex = 1;
             radioRtf.TabStop = true;
             radioRtf.Text = "Rich-Text-Format ( RTF )";
@@ -161,10 +157,9 @@
             // radioPdf
             // 
             radioPdf.Dock = DockStyle.Top;
-            radioPdf.Location = new Point(29, 53);
-            radioPdf.Margin = new Padding(3, 4, 3, 4);
+            radioPdf.Location = new Point(25, 41);
             radioPdf.Name = "radioPdf";
-            radioPdf.Size = new Size(290, 39);
+            radioPdf.Size = new Size(254, 29);
             radioPdf.TabIndex = 0;
             radioPdf.TabStop = true;
             radioPdf.Text = "Portable-Document-File ( PDF )";
@@ -173,13 +168,13 @@
             // panel3
             // 
             panel3.Controls.Add(lvwBlocks);
+            panel3.Controls.Add(tsExpoFiles);
             panel3.Controls.Add(label1);
             panel3.Dock = DockStyle.Left;
             panel3.Location = new Point(0, 0);
-            panel3.Margin = new Padding(3, 4, 3, 4);
             panel3.Name = "panel3";
-            panel3.Padding = new Padding(29, 33, 29, 33);
-            panel3.Size = new Size(386, 416);
+            panel3.Padding = new Padding(25);
+            panel3.Size = new Size(338, 312);
             panel3.TabIndex = 0;
             // 
             // lvwBlocks
@@ -190,11 +185,10 @@
             lvwBlocks.FullRowSelect = true;
             lvwBlocks.GridLines = true;
             lvwBlocks.HeaderStyle = ColumnHeaderStyle.Nonclickable;
-            lvwBlocks.Location = new Point(29, 112);
-            lvwBlocks.Margin = new Padding(3, 4, 3, 4);
+            lvwBlocks.Location = new Point(25, 109);
             lvwBlocks.MultiSelect = false;
             lvwBlocks.Name = "lvwBlocks";
-            lvwBlocks.Size = new Size(328, 271);
+            lvwBlocks.Size = new Size(288, 178);
             lvwBlocks.TabIndex = 1;
             lvwBlocks.UseCompatibleStateImageBehavior = false;
             lvwBlocks.View = View.Details;
@@ -220,12 +214,41 @@
             // 
             colChanged.Text = "Changed";
             // 
+            // tsExpoFiles
+            // 
+            tsExpoFiles.Items.AddRange(new ToolStripItem[] { tsSelectAllBlocks, tsDiscardSelection });
+            tsExpoFiles.Location = new Point(25, 84);
+            tsExpoFiles.Name = "tsExpoFiles";
+            tsExpoFiles.Size = new Size(288, 25);
+            tsExpoFiles.TabIndex = 3;
+            tsExpoFiles.Text = "toolStrip1";
+            // 
+            // tsSelectAllBlocks
+            // 
+            tsSelectAllBlocks.DisplayStyle = ToolStripItemDisplayStyle.Image;
+            tsSelectAllBlocks.Image = (Image)resources.GetObject("tsSelectAllBlocks.Image");
+            tsSelectAllBlocks.ImageTransparentColor = Color.Magenta;
+            tsSelectAllBlocks.Name = "tsSelectAllBlocks";
+            tsSelectAllBlocks.Size = new Size(23, 22);
+            tsSelectAllBlocks.Text = "Select all Blocks";
+            tsSelectAllBlocks.Click += tsSelectAllBlocks_Click;
+            // 
+            // tsDiscardSelection
+            // 
+            tsDiscardSelection.DisplayStyle = ToolStripItemDisplayStyle.Image;
+            tsDiscardSelection.Image = (Image)resources.GetObject("tsDiscardSelection.Image");
+            tsDiscardSelection.ImageTransparentColor = Color.Magenta;
+            tsDiscardSelection.Name = "tsDiscardSelection";
+            tsDiscardSelection.Size = new Size(23, 22);
+            tsDiscardSelection.Text = "Discard Selection";
+            tsDiscardSelection.Click += tsDiscardSelection_Click;
+            // 
             // label1
             // 
             label1.Dock = DockStyle.Top;
-            label1.Location = new Point(29, 33);
+            label1.Location = new Point(25, 25);
             label1.Name = "label1";
-            label1.Size = new Size(328, 79);
+            label1.Size = new Size(288, 59);
             label1.TabIndex = 2;
             label1.Text = "Please select the Blocks you need to export. Please note, by choosing RTF or TXT the exporter will generate multiple Files.";
             // 
@@ -235,29 +258,26 @@
             panel2.Controls.Add(btnCancel);
             panel2.Controls.Add(btnExport);
             panel2.Dock = DockStyle.Bottom;
-            panel2.Location = new Point(0, 416);
-            panel2.Margin = new Padding(3, 4, 3, 4);
+            panel2.Location = new Point(0, 312);
             panel2.Name = "panel2";
-            panel2.Padding = new Padding(17, 20, 17, 20);
-            panel2.Size = new Size(768, 83);
+            panel2.Padding = new Padding(15);
+            panel2.Size = new Size(672, 62);
             panel2.TabIndex = 1;
             // 
             // prgExport
             // 
-            prgExport.Location = new Point(21, 24);
-            prgExport.Margin = new Padding(3, 4, 3, 4);
+            prgExport.Location = new Point(18, 18);
             prgExport.Name = "prgExport";
-            prgExport.Size = new Size(458, 35);
+            prgExport.Size = new Size(401, 26);
             prgExport.TabIndex = 2;
             prgExport.Visible = false;
             // 
             // btnCancel
             // 
             btnCancel.Dock = DockStyle.Right;
-            btnCancel.Location = new Point(508, 20);
-            btnCancel.Margin = new Padding(3, 4, 3, 4);
+            btnCancel.Location = new Point(444, 15);
             btnCancel.Name = "btnCancel";
-            btnCancel.Size = new Size(122, 43);
+            btnCancel.Size = new Size(107, 32);
             btnCancel.TabIndex = 1;
             btnCancel.Text = "Cancel";
             btnCancel.UseVisualStyleBackColor = true;
@@ -265,23 +285,21 @@
             // btnExport
             // 
             btnExport.Dock = DockStyle.Right;
-            btnExport.Location = new Point(630, 20);
-            btnExport.Margin = new Padding(3, 4, 3, 4);
+            btnExport.Location = new Point(551, 15);
             btnExport.Name = "btnExport";
-            btnExport.Size = new Size(121, 43);
+            btnExport.Size = new Size(106, 32);
             btnExport.TabIndex = 0;
             btnExport.Text = "Continue...";
             btnExport.UseVisualStyleBackColor = true;
             // 
             // exporterDiag
             // 
-            AutoScaleDimensions = new SizeF(8F, 20F);
+            AutoScaleDimensions = new SizeF(7F, 15F);
             AutoScaleMode = AutoScaleMode.Font;
-            ClientSize = new Size(768, 499);
+            ClientSize = new Size(672, 374);
             Controls.Add(panel1);
             Controls.Add(panel2);
             Icon = (Icon)resources.GetObject("$this.Icon");
-            Margin = new Padding(3, 4, 3, 4);
             Name = "exporterDiag";
             StartPosition = FormStartPosition.CenterScreen;
             Text = "Export Blocks...";
@@ -291,6 +309,9 @@
             grpOutput.PerformLayout();
             grpFileFormat.ResumeLayout(false);
             panel3.ResumeLayout(false);
+            panel3.PerformLayout();
+            tsExpoFiles.ResumeLayout(false);
+            tsExpoFiles.PerformLayout();
             panel2.ResumeLayout(false);
             ResumeLayout(false);
         }
@@ -318,5 +339,8 @@
         private Button btnCancel;
         private Button btnExport;
         private ProgressBar prgExport;
+        private ToolStrip tsExpoFiles;
+        private ToolStripButton tsSelectAllBlocks;
+        private ToolStripButton tsDiscardSelection;
     }
 }

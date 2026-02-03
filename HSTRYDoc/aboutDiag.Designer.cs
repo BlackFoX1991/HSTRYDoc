@@ -29,50 +29,21 @@
         private void InitializeComponent()
         {
             System.ComponentModel.ComponentResourceManager resources = new System.ComponentModel.ComponentResourceManager(typeof(aboutDiag));
-            panel1 = new Panel();
-            button1 = new Button();
             linkLabel1 = new LinkLabel();
             label1 = new Label();
-            panel1.SuspendLayout();
+            pictureBox1 = new PictureBox();
+            label2 = new Label();
+            ((System.ComponentModel.ISupportInitialize)pictureBox1).BeginInit();
             SuspendLayout();
-            // 
-            // panel1
-            // 
-            panel1.BackColor = Color.FromArgb(64, 64, 64);
-            panel1.BackgroundImage = (Image)resources.GetObject("panel1.BackgroundImage");
-            panel1.BackgroundImageLayout = ImageLayout.Stretch;
-            panel1.BorderStyle = BorderStyle.FixedSingle;
-            panel1.Controls.Add(button1);
-            panel1.Controls.Add(linkLabel1);
-            panel1.Controls.Add(label1);
-            panel1.Dock = DockStyle.Fill;
-            panel1.Location = new Point(0, 0);
-            panel1.Margin = new Padding(3, 4, 3, 4);
-            panel1.Name = "panel1";
-            panel1.Size = new Size(880, 360);
-            panel1.TabIndex = 0;
-            // 
-            // button1
-            // 
-            button1.BackColor = Color.Maroon;
-            button1.FlatStyle = FlatStyle.Flat;
-            button1.Location = new Point(845, 4);
-            button1.Margin = new Padding(3, 4, 3, 4);
-            button1.Name = "button1";
-            button1.Size = new Size(30, 32);
-            button1.TabIndex = 2;
-            button1.Text = "X";
-            button1.UseVisualStyleBackColor = false;
-            button1.Click += button1_Click;
             // 
             // linkLabel1
             // 
             linkLabel1.ActiveLinkColor = Color.FromArgb(128, 64, 0);
             linkLabel1.AutoSize = true;
             linkLabel1.LinkColor = Color.FromArgb(192, 192, 255);
-            linkLabel1.Location = new Point(50, 310);
+            linkLabel1.Location = new Point(12, 293);
             linkLabel1.Name = "linkLabel1";
-            linkLabel1.Size = new Size(230, 20);
+            linkLabel1.Size = new Size(186, 15);
             linkLabel1.TabIndex = 1;
             linkLabel1.TabStop = true;
             linkLabel1.Text = "https://github.com/BlackFoX1991";
@@ -82,35 +53,60 @@
             // 
             label1.BorderStyle = BorderStyle.FixedSingle;
             label1.ForeColor = Color.White;
-            label1.Location = new Point(333, 229);
+            label1.Location = new Point(12, 318);
             label1.Name = "label1";
-            label1.Size = new Size(452, 101);
+            label1.Size = new Size(464, 69);
             label1.TabIndex = 0;
             label1.Text = resources.GetString("label1.Text");
             // 
+            // pictureBox1
+            // 
+            pictureBox1.BorderStyle = BorderStyle.FixedSingle;
+            pictureBox1.Image = (Image)resources.GetObject("pictureBox1.Image");
+            pictureBox1.Location = new Point(12, 12);
+            pictureBox1.Name = "pictureBox1";
+            pictureBox1.Size = new Size(464, 276);
+            pictureBox1.SizeMode = PictureBoxSizeMode.StretchImage;
+            pictureBox1.TabIndex = 2;
+            pictureBox1.TabStop = false;
+            // 
+            // label2
+            // 
+            label2.AutoSize = true;
+            label2.ForeColor = Color.FromArgb(64, 64, 64);
+            label2.Location = new Point(12, 450);
+            label2.Name = "label2";
+            label2.Size = new Size(118, 15);
+            label2.TabIndex = 3;
+            label2.Text = "Ⓒ 2026 Artur Loewen";
+            // 
             // aboutDiag
             // 
-            AutoScaleDimensions = new SizeF(8F, 20F);
+            AutoScaleDimensions = new SizeF(7F, 15F);
             AutoScaleMode = AutoScaleMode.Font;
-            ClientSize = new Size(880, 360);
-            Controls.Add(panel1);
-            FormBorderStyle = FormBorderStyle.None;
+            BackColor = Color.Black;
+            ClientSize = new Size(488, 474);
+            Controls.Add(label2);
+            Controls.Add(pictureBox1);
+            Controls.Add(linkLabel1);
+            Controls.Add(label1);
+            FormBorderStyle = FormBorderStyle.FixedDialog;
             Icon = (Icon)resources.GetObject("$this.Icon");
-            Margin = new Padding(3, 4, 3, 4);
+            MaximizeBox = false;
+            MinimizeBox = false;
             Name = "aboutDiag";
             ShowInTaskbar = false;
             StartPosition = FormStartPosition.CenterScreen;
-            Text = "aboutDiag";
-            panel1.ResumeLayout(false);
-            panel1.PerformLayout();
+            Text = "About...";
+            ((System.ComponentModel.ISupportInitialize)pictureBox1).EndInit();
             ResumeLayout(false);
+            PerformLayout();
         }
 
         #endregion
-
-        private Panel panel1;
         private LinkLabel linkLabel1;
         private Label label1;
-        private Button button1;
+        private PictureBox pictureBox1;
+        private Label label2;
     }
 }

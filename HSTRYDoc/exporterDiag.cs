@@ -7,6 +7,7 @@ using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Forms;
+using static System.Windows.Forms.VisualStyles.VisualStyleElement;
 
 namespace HSTRYDoc
 {
@@ -545,6 +546,39 @@ namespace HSTRYDoc
             if (s.Length > 120) s = s.Substring(0, 120);
             if (string.IsNullOrWhiteSpace(s)) s = "block";
             return s;
+        }
+
+        private void tsSelectAllBlocks_Click(object sender, EventArgs e)
+        {
+            if (lvwBlocks.Items.Count == 0)
+                return;
+            lvwBlocks.BeginUpdate();
+            try
+            {
+                foreach (ListViewItem item in lvwBlocks.Items)
+                    item.Checked = true;
+            }
+            finally
+            {
+                lvwBlocks.EndUpdate();
+            }
+
+        }
+
+        private void tsDiscardSelection_Click(object sender, EventArgs e)
+        {
+            if (lvwBlocks.Items.Count == 0)
+                return;
+            lvwBlocks.BeginUpdate();
+            try
+            {
+                foreach (ListViewItem item in lvwBlocks.Items)
+                    item.Checked = false;
+            }
+            finally
+            {
+                lvwBlocks.EndUpdate();
+            }
         }
     }
 }

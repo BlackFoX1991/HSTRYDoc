@@ -84,6 +84,20 @@ namespace HSTRYDoc
                 this.btnTestblocks.Visible = true;
             }
 
+            var tmr = new System.Windows.Forms.Timer();
+            tmr.Interval = 2000;
+
+            var splsh = new SplashScreen();
+            splsh.Show(this);
+            tmr.Tick += (_, __) =>
+            {
+                splsh.Close();
+                tmr.Stop();
+            };
+
+            tmr.Start();
+
+
         }
 
         private async void UiKeyManagement()
@@ -3668,10 +3682,10 @@ namespace HSTRYDoc
 
         private async void toolStripButton1_Click_1(object sender, EventArgs e)
         {
-            await CreateTestBlocksAsync(count: 10000, minWordsPerBlock: 2500, maxWordsPerBlock: 5000);
+            await CreateTestBlocksAsync(count: 100, minWordsPerBlock: 2500, maxWordsPerBlock: 5000);
         }
 
-        
+
         private void toolButtonFontstyle_Click(object sender, EventArgs e)
         {
             Font current = rtfMainText.SelectionFont ?? rtfMainText.Font;
