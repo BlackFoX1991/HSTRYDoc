@@ -1,12 +1,21 @@
 # HstryDocu. Confidential documents. Structured. Encrypted.
 
-Local documentation often sat unprotected on my machine. Some notes were unfinished or simply not intended for others, and in some cases they could be read, but not modified. That’s why I built an on-premise solution that provides encryption and clear permissions. Thats how HstryDocu came into my mind.
+Local documentation often sat unprotected on my machine. Some notes were unfinished or simply not intended for others, and in some cases they should be readable but not editable. That’s why I built an on-premise solution that combines strong encryption with clear, enforceable permissions: HstryDocu.
 
-HstryDocu is an application for creating and securely encrypting documents. Within an Hstry container, multiple document blocks can be created, organized, and managed. For rendering and formatting, the established Rich Text Format (RTF) is used, ensuring content can be displayed in a structured and readable way.
+HstryDocu lets you create encrypted **containers** and manage content as independent document blocks. Each block supports **RTF** formatting for structured, readable documents, while the container maintains integrity and change tracking.
 
-The security model is based on public/private key pairs for encryption and decryption. When the application starts, the required keys can either be generated (if they do not yet exist) or imported from an existing location. External drives or other sources can also be selected; by default, HstryDocu uses the folder “HSTRY_KEY” in the root directory of the selected drive/source.
+## Security & sharing
+HstryDocu uses **ECC P-384** cryptography:
+- Containers are **encrypted** and the header is **signed** to detect tampering.
+- **Private keys are password-encrypted**.
+- Sharing is done via **public keys**: recipients can be added and managed at any time.
+- Optional pairing: when adding a recipient, you can attach the recipient’s **signing public key** (`.hstrysigpub`) alongside the encryption public key (`.hstrypub`) when available.
 
-In the key management section, recipients (public keys) can be added and permissions (read/write) can be configured with fine-grained control. Changes to a container are only applied permanently after saving.
+## Permissions
+Recipients can be granted **per-block Read/Write access**. Permissions are enforced at block level and changes are only persisted once the container is saved.
+
+## Key workflow
+Keys can be generated or loaded from disk. Public keys can be shared safely; private keys remain encrypted with a password. External sources (e.g., USB) can be used depending on your setup.
 
 
 ---
