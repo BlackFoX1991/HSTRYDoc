@@ -1,4 +1,4 @@
-﻿// KeyManagerDialog.Designer.cs (V4 Option A: per-block access control + bulk ops)
+﻿// KeyManagerDialog.Designer.cs (V7: recipients + per-block access control + bulk ops)
 using System;
 using System.Drawing;
 using System.Windows.Forms;
@@ -29,13 +29,13 @@ namespace HSTRYDoc
         private ColumnHeader colAlg;
         private ColumnHeader colWrappedLen;
         private ColumnHeader colSpkiLen;
+        private ColumnHeader colSigSpkiLen;
         private Button btnAddRecipient;
         private Button btnRemoveRecipient;
         private Button btnCopyKeyId;
 
         private Label lblDropHint;
 
-        // Block access controls (V4)
         private GroupBox grpBlockAccess;
         private Label lblBlockAccessHint;
         private ListView lvwBlocks;
@@ -81,6 +81,7 @@ namespace HSTRYDoc
             colAlg = new ColumnHeader();
             colWrappedLen = new ColumnHeader();
             colSpkiLen = new ColumnHeader();
+            colSigSpkiLen = new ColumnHeader();
             btnAddRecipient = new Button();
             btnRemoveRecipient = new Button();
             btnCopyKeyId = new Button();
@@ -155,7 +156,7 @@ namespace HSTRYDoc
             btnCreateKeyPair.Name = "btnCreateKeyPair";
             btnCreateKeyPair.Size = new Size(180, 27);
             btnCreateKeyPair.TabIndex = 3;
-            btnCreateKeyPair.Text = "Create key pair...";
+            btnCreateKeyPair.Text = "Create key set...";
             btnCreateKeyPair.UseVisualStyleBackColor = true;
             // 
             // btnExportPublic
@@ -236,7 +237,7 @@ namespace HSTRYDoc
             // 
             // lvwRecipients
             // 
-            lvwRecipients.Columns.AddRange(new ColumnHeader[] { colKeyId, colAlg, colWrappedLen, colSpkiLen });
+            lvwRecipients.Columns.AddRange(new ColumnHeader[] { colKeyId, colAlg, colWrappedLen, colSpkiLen, colSigSpkiLen });
             lvwRecipients.FullRowSelect = true;
             lvwRecipients.GridLines = true;
             lvwRecipients.Location = new Point(16, 24);
@@ -250,7 +251,7 @@ namespace HSTRYDoc
             // colKeyId
             // 
             colKeyId.Text = "Key ID (SHA-256)";
-            colKeyId.Width = 430;
+            colKeyId.Width = 350;
             // 
             // colAlg
             // 
@@ -260,12 +261,17 @@ namespace HSTRYDoc
             // colWrappedLen
             // 
             colWrappedLen.Text = "Wrapped DEK (bytes)";
-            colWrappedLen.Width = 150;
+            colWrappedLen.Width = 130;
             // 
             // colSpkiLen
             // 
-            colSpkiLen.Text = "Public key (bytes)";
-            colSpkiLen.Width = 120;
+            colSpkiLen.Text = "ECDH pub (bytes)";
+            colSpkiLen.Width = 110;
+            // 
+            // colSigSpkiLen
+            // 
+            colSigSpkiLen.Text = "Sig pub (bytes)";
+            colSigSpkiLen.Width = 110;
             // 
             // btnAddRecipient
             // 
@@ -299,9 +305,9 @@ namespace HSTRYDoc
             lblDropHint.AutoSize = true;
             lblDropHint.Location = new Point(458, 161);
             lblDropHint.Name = "lblDropHint";
-            lblDropHint.Size = new Size(252, 15);
+            lblDropHint.Size = new Size(271, 15);
             lblDropHint.TabIndex = 4;
-            lblDropHint.Text = "Tip: Drag and drop .hstrypub files onto the list.";
+            lblDropHint.Text = "Tip: Drag .hstrypub (+ optional .hstrysigpub) here.";
             // 
             // grpBlockAccess
             // 
@@ -317,7 +323,7 @@ namespace HSTRYDoc
             grpBlockAccess.Size = new Size(760, 229);
             grpBlockAccess.TabIndex = 2;
             grpBlockAccess.TabStop = false;
-            grpBlockAccess.Text = "Block access (V4)";
+            grpBlockAccess.Text = "Block access";
             // 
             // lblBlockAccessHint
             // 
@@ -348,12 +354,12 @@ namespace HSTRYDoc
             // colBlockTitle
             // 
             colBlockTitle.Text = "Title";
-            colBlockTitle.Width = 420;
+            colBlockTitle.Width = 380;
             // 
             // colBlockRights
             // 
             colBlockRights.Text = "Rights";
-            colBlockRights.Width = 120;
+            colBlockRights.Width = 90;
             // 
             // btnGrantRead
             // 

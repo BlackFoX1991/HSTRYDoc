@@ -120,14 +120,10 @@ namespace HSTRYDoc
                 {
                     var b = _container.Blocks[i];
 
-                    // V4: Block may be restricted. Skip it in exporter UI.
-                    if (_container.Version == HSTRYContainer.CurrentVersion)
-                    {
-                        // In V4, inaccessible blocks have Title "<restricted>" (from Validate) and GetRtfDocument will throw.
-                        // Best UX: do not show them for export.
-                        if (string.Equals(b.Title, "<restricted>", StringComparison.Ordinal))
-                            continue;
-                    }
+                    // Skip restricted blocks (independent of container version).
+                    // Validate() hydrates inaccessible blocks with "<restricted>".
+                    if (string.Equals(b.Title, "<restricted>", StringComparison.Ordinal))
+                        continue;
 
                     string hashHex = string.Empty; // computed on demand
                     string size = ByteFormat.ToHumanSize(b.StoredSizeBytes);
@@ -158,8 +154,13 @@ namespace HSTRYDoc
             if (item == null) return;
             if (item.SubItems.Count < 2) return;
 
-            // Already computed?
-            if (!string.IsNullOrWhiteSpace(item.SubItems[1].Text)) return;
+            string cur = item.SubItems[1].Text ?? string.Empty;
+
+            // Already computed or currently computing?
+            if (!string.IsNullOrWhiteSpace(cur) && !string.Equals(cur, "Computing…", StringComparison.Ordinal))
+                return;
+            if (string.Equals(cur, "Computing…", StringComparison.Ordinal))
+                return;
 
             if (item.Tag is not int idx) return;
             if (idx < 0 || idx >= _container.Blocks.Count) return;
@@ -315,9 +316,13 @@ namespace HSTRYDoc
             btnChoose.Enabled = enabled;
             btnCancel.Enabled = enabled;
 
-            // Export depends on selection/output, will be re-evaluated
-            btnExport.Enabled = enabled && btnExport.Enabled;
+            // Re-evaluate export availability properly (selection + output).
+            if (enabled)
+                UpdateExportButtonState();
+            else
+                btnExport.Enabled = false;
         }
+
 
         // ----------------------------
         // RTF export (multiple files)

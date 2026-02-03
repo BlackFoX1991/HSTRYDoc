@@ -1,11 +1,16 @@
-﻿// KeyManagerDialog.cs (V6 ECC: recipients + per-block access control)
+﻿// KeyManagerDialog.cs (V7 ECC: recipients + per-block access control)
 // - Uses ECDH private key for opening/unwrapping + owner block operations
 // - Uses ECDSA signing private key for header changes (add/remove recipients)
 // - Key files:
-//   - ECDH private: *.hstrypriv
+//   - ECDH private: *.hstrypriv (encrypted)
 //   - ECDH public:  *.hstrypub
-//   - ECDSA signing private: *.hstrysigpriv (derived from *.hstrypriv)
+//   - ECDSA signing private: *.hstrysigpriv (derived from *.hstrypriv, encrypted)
 //   - ECDSA signing public:  *.hstrysigpub
+//
+// V7 addition:
+// - RecipientEntry may carry optional recipient SigningPublicKeySpki (from *.hstrysigpub)
+// - Drag&Drop can pair .hstrypub with matching .hstrysigpub (same basename, same folder)
+// - User is asked once per drop whether to include sigpubs when available
 
 using System;
 using System.Collections.Generic;
@@ -22,10 +27,6 @@ namespace HSTRYDoc
 {
     public partial class KeyManagerDialog : Form
     {
-
-        private readonly Func<string?>? _passwordProvider;
-private readonly Action<string?>? _passwordStore;
-
         private string? _sessionKeyPassword;
 
         private readonly HSTRYContainer _container;
@@ -49,6 +50,7 @@ private readonly Action<string?>? _passwordStore;
 
             SelectedEcdhPrivateKeyPath = currentEcdhPrivateKeyPath;
 
+            // Wire UI
             btnBrowsePriv.Click += (_, __) => UiBrowsePrivateKey();
             btnCreateKeyPair.Click += (_, __) => UiCreateKeyPairForSharing();
             btnExportPublic.Click += (_, __) => UiExportPublicKey();
@@ -69,28 +71,27 @@ private readonly Action<string?>? _passwordStore;
             btnOk.Click += (_, __) => { DialogResult = DialogResult.OK; Close(); };
             btnCancel.Click += (_, __) => { DialogResult = DialogResult.Cancel; Close(); };
 
+            // Drag & drop (V7): .hstrypub + optional .hstrysigpub
             lvwRecipients.AllowDrop = true;
             lvwRecipients.DragEnter += LvwRecipients_DragEnter;
             lvwRecipients.DragDrop += LvwRecipients_DragDrop;
 
             lvwRecipients.SelectedIndexChanged += (_, __) => RefreshBlocksList();
-
             lvwBlocks.SelectedIndexChanged += (_, __) => UpdateMyRecipientStatusAndPermissions();
             lvwBlocks.ItemSelectionChanged += (_, __) => UpdateMyRecipientStatusAndPermissions();
 
+            // Do NOT auto-prompt password on dialog open; load lazily on action.
+            UpdateMyKeyUi(SelectedEcdhPrivateKeyPath, null);
             RefreshRecipientsList();
-
-            if (!string.IsNullOrWhiteSpace(SelectedEcdhPrivateKeyPath) && File.Exists(SelectedEcdhPrivateKeyPath))
-                TryLoadMyEcdhPrivateKey(SelectedEcdhPrivateKeyPath!, showErrors: false);
-            else
-                UpdateMyKeyUi(null, null);
-
-            UpdateMyRecipientStatusAndPermissions();
             RefreshBlocksList();
+            UpdateMyRecipientStatusAndPermissions();
         }
 
         private static string DeriveSigningPrivateKeyPath(string ecdhPrivPath)
             => Path.ChangeExtension(ecdhPrivPath, ".hstrysigpriv");
+
+        private static string DeriveSigningPublicKeyPathFromEcdhPublic(string ecdhPubPath)
+            => Path.ChangeExtension(ecdhPubPath, ".hstrysigpub");
 
         private void SetUiBusy(bool busy)
         {
@@ -120,7 +121,6 @@ private readonly Action<string?>? _passwordStore;
         {
             if (_myEcdhPrivateKey != null)
             {
-                // already loaded
                 if (requireOwner && !_isOwnerKeyLoaded)
                 {
                     if (showErrors)
@@ -131,7 +131,6 @@ private readonly Action<string?>? _passwordStore;
 
                 if (requireSigningKey && _isOwnerKeyLoaded && _mySigningPrivateKey == null)
                 {
-                    // try load signing key if missing
                     TryLoadSigningKeyForEcdhPath(SelectedEcdhPrivateKeyPath ?? "", showErrors: showErrors);
                     if (_mySigningPrivateKey == null)
                         return false;
@@ -140,7 +139,6 @@ private readonly Action<string?>? _passwordStore;
                 return true;
             }
 
-            // Need a selected path
             if (string.IsNullOrWhiteSpace(SelectedEcdhPrivateKeyPath) || !File.Exists(SelectedEcdhPrivateKeyPath))
             {
                 if (showErrors)
@@ -149,7 +147,6 @@ private readonly Action<string?>? _passwordStore;
                 return false;
             }
 
-            // Prompt password only now
             if (!EnsureSessionPasswordPrompt(out string pw))
                 return false;
 
@@ -162,7 +159,6 @@ private readonly Action<string?>? _passwordStore;
 
                 _isOwnerKeyLoaded = IsOwnerEcdhPrivateKey(_myEcdhPrivateKey);
 
-                // If owner and signing key is required, load it
                 if (_isOwnerKeyLoaded && requireSigningKey)
                     TryLoadSigningKeyForEcdhPath(SelectedEcdhPrivateKeyPath!, showErrors: showErrors);
 
@@ -194,7 +190,6 @@ private readonly Action<string?>? _passwordStore;
             }
         }
 
-
         // ============================================================
         // Password helpers (dialog-session cached)
         // ============================================================
@@ -211,11 +206,8 @@ private readonly Action<string?>? _passwordStore;
                 "Enter password:",
                 PasswordDialog.PasswordDialogMode.Prompt);
 
-            if (pw == null)
-                return false;
-
-            if (string.IsNullOrWhiteSpace(pw))
-                return false;
+            if (pw == null) return false;
+            if (string.IsNullOrWhiteSpace(pw)) return false;
 
             _sessionKeyPassword = pw;
             password = pw;
@@ -232,11 +224,8 @@ private readonly Action<string?>? _passwordStore;
                 "Set a password for this private key set:",
                 PasswordDialog.PasswordDialogMode.SetNew);
 
-            if (pw == null)
-                return false;
-
-            if (string.IsNullOrWhiteSpace(pw))
-                return false;
+            if (pw == null) return false;
+            if (string.IsNullOrWhiteSpace(pw)) return false;
 
             // IMPORTANT: Do NOT overwrite _sessionKeyPassword here!
             password = pw;
@@ -257,10 +246,12 @@ private readonly Action<string?>? _passwordStore;
             return HSTRYContainer.EcdsaKeyFiles.LoadPrivateKeyPkcs8Encrypted(signPath, password);
         }
 
-
+        // ============================================================
+        // Drag & drop pairing (.hstrypub + optional .hstrysigpub)
+        // ============================================================
         private void LvwRecipients_DragEnter(object? sender, DragEventArgs e)
         {
-            if (!_isOwnerKeyLoaded || _container.Version != HSTRYContainer.CurrentVersion)
+            if (_container.Version != HSTRYContainer.CurrentVersion)
             {
                 e.Effect = DragDropEffects.None;
                 return;
@@ -268,14 +259,19 @@ private readonly Action<string?>? _passwordStore;
 
             if (e.Data?.GetDataPresent(DataFormats.FileDrop) == true)
                 e.Effect = DragDropEffects.Copy;
+            else
+                e.Effect = DragDropEffects.None;
         }
 
         private void LvwRecipients_DragDrop(object? sender, DragEventArgs e)
         {
             if (_container.Version != HSTRYContainer.CurrentVersion)
             {
-                MessageBox.Show(this, "This container is not V6.", "Recipients",
-                    MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                MessageBox.Show(this,
+                    "This container is not V7.",
+                    "Recipients",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Warning);
                 return;
             }
 
@@ -285,18 +281,77 @@ private readonly Action<string?>? _passwordStore;
             if (e.Data?.GetData(DataFormats.FileDrop) is not string[] files || files.Length == 0)
                 return;
 
-            int added = 0;
+            // Collect pub candidates
+            var pubPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var sigPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
             foreach (var f in files)
             {
                 if (!File.Exists(f)) continue;
-                if (!string.Equals(Path.GetExtension(f), ".hstrypub", StringComparison.OrdinalIgnoreCase))
-                    continue;
 
+                string ext = Path.GetExtension(f);
+                if (ext.Equals(".hstrypub", StringComparison.OrdinalIgnoreCase))
+                    pubPaths.Add(f);
+                else if (ext.Equals(".hstrysigpub", StringComparison.OrdinalIgnoreCase))
+                    sigPaths.Add(f);
+            }
+
+            // If only sigpub was dropped, try infer .hstrypub (same basename)
+            foreach (var sig in sigPaths.ToArray())
+            {
+                string inferredPub = Path.ChangeExtension(sig, ".hstrypub");
+                if (File.Exists(inferredPub))
+                    pubPaths.Add(inferredPub);
+            }
+
+            if (pubPaths.Count == 0)
+                return;
+
+            // Determine which pubs have a matching sigpub available (either dropped or exists beside)
+            var pairs = new List<(string pub, string? sig)>();
+            foreach (var pub in pubPaths)
+            {
+                string expectedSig = DeriveSigningPublicKeyPathFromEcdhPublic(pub);
+                string? sig = null;
+
+                if (sigPaths.Contains(expectedSig) || File.Exists(expectedSig))
+                    sig = expectedSig;
+
+                pairs.Add((pub, sig));
+            }
+
+            bool anySigAvailable = pairs.Any(x => !string.IsNullOrWhiteSpace(x.sig) && File.Exists(x.sig!));
+
+            bool includeSig = false;
+            if (anySigAvailable)
+            {
+                var ask = MessageBox.Show(
+                    this,
+                    "Signing public keys (*.hstrysigpub) were found for one or more recipients.\n\nInclude them when adding recipients?",
+                    "Recipients",
+                    MessageBoxButtons.YesNo,
+                    MessageBoxIcon.Question,
+                    MessageBoxDefaultButton.Button1);
+
+                includeSig = (ask == DialogResult.Yes);
+            }
+
+            int added = 0;
+
+            foreach (var (pubPath, sigPath) in pairs)
+            {
                 try
                 {
-                    using var pub = HSTRYContainer.EcdhKeyFiles.LoadPublicKeySpki(f);
-                    _container.AddRecipient(_mySigningPrivateKey!, pub);
+                    using var pub = HSTRYContainer.EcdhKeyFiles.LoadPublicKeySpki(pubPath);
+
+                    byte[]? sigSpki = null;
+                    if (includeSig && !string.IsNullOrWhiteSpace(sigPath) && File.Exists(sigPath!))
+                    {
+                        using var sigPub = HSTRYContainer.EcdsaKeyFiles.LoadPublicKeySpki(sigPath!);
+                        sigSpki = sigPub.ExportSubjectPublicKeyInfo();
+                    }
+
+                    _container.AddRecipient(_mySigningPrivateKey!, pub, sigSpki);
                     added++;
                     ContainerChanged = true;
                 }
@@ -320,7 +375,9 @@ private readonly Action<string?>? _passwordStore;
             }
         }
 
-
+        // ============================================================
+        // Key file selection (lazy load)
+        // ============================================================
         private void UiBrowsePrivateKey()
         {
             using var ofd = new OpenFileDialog
@@ -333,77 +390,15 @@ private readonly Action<string?>? _passwordStore;
             if (ofd.ShowDialog(this) != DialogResult.OK)
                 return;
 
-            // New path -> drop cached password + loaded keys
             if (!string.Equals(SelectedEcdhPrivateKeyPath ?? "", ofd.FileName, StringComparison.OrdinalIgnoreCase))
                 _sessionKeyPassword = null;
 
             SelectedEcdhPrivateKeyPath = ofd.FileName;
 
-            // LAZY: do not load key yet
+            // Lazy: do not load immediately
             ClearLoadedKeys();
-
             RefreshBlocksList();
             UpdateMyRecipientStatusAndPermissions();
-        }
-
-
-
-        private void TryLoadMyEcdhPrivateKey(string path, bool showErrors)
-        {
-            try
-            {
-                if (!EnsureSessionPasswordPrompt(out string pw))
-                    return;
-
-                _myEcdhPrivateKey?.Dispose();
-                _myEcdhPrivateKey = LoadEcdhPrivateKeyWithPassword(path, pw);
-
-                byte[] keyId = HSTRYContainer.EcdhKeyFiles.ComputeKeyIdFromPublicKey(_myEcdhPrivateKey);
-                _myKeyIdHex = Convert.ToHexString(keyId);
-
-                SelectedEcdhPrivateKeyPath = path;
-
-                _isOwnerKeyLoaded = IsOwnerEcdhPrivateKey(_myEcdhPrivateKey);
-
-                // Owner features require signing key (also encrypted)
-                TryLoadSigningKeyForEcdhPath(path, showErrors: showErrors && _isOwnerKeyLoaded);
-
-                UpdateMyKeyUi(path, _myKeyIdHex);
-            }
-            catch (CryptographicException)
-            {
-                // wrong password or corrupted key => force re-prompt
-                _sessionKeyPassword = null;
-
-                _myEcdhPrivateKey?.Dispose();
-                _myEcdhPrivateKey = null;
-                _mySigningPrivateKey?.Dispose();
-                _mySigningPrivateKey = null;
-
-                _myKeyIdHex = null;
-                _isOwnerKeyLoaded = false;
-
-                UpdateMyKeyUi(path, "");
-
-                if (showErrors)
-                    MessageBox.Show(this, "Wrong password or corrupted key file.", "Load private key",
-                        MessageBoxButtons.OK, MessageBoxIcon.Error);
-            }
-            catch (Exception ex)
-            {
-                _myEcdhPrivateKey?.Dispose();
-                _myEcdhPrivateKey = null;
-                _mySigningPrivateKey?.Dispose();
-                _mySigningPrivateKey = null;
-
-                _myKeyIdHex = null;
-                _isOwnerKeyLoaded = false;
-
-                UpdateMyKeyUi(path, "");
-
-                if (showErrors)
-                    MessageBox.Show(this, ex.Message, "Load private key", MessageBoxButtons.OK, MessageBoxIcon.Error);
-            }
         }
 
         private void TryLoadSigningKeyForEcdhPath(string ecdhPrivPath, bool showErrors)
@@ -416,21 +411,7 @@ private readonly Action<string?>? _passwordStore;
                 if (!EnsureSessionPasswordPrompt(out string pw))
                     return;
 
-                string signPath = DeriveSigningPrivateKeyPath(ecdhPrivPath);
-                if (!File.Exists(signPath))
-                {
-                    if (showErrors)
-                    {
-                        MessageBox.Show(this,
-                            "Owner signing key is missing.\n\nExpected file:\n" + signPath,
-                            "Owner signing key",
-                            MessageBoxButtons.OK,
-                            MessageBoxIcon.Warning);
-                    }
-                    return;
-                }
-
-                _mySigningPrivateKey = HSTRYContainer.EcdsaKeyFiles.LoadPrivateKeyPkcs8Encrypted(signPath, pw);
+                _mySigningPrivateKey = LoadEcdsaSigningKeyWithPassword(ecdhPrivPath, pw);
             }
             catch (CryptographicException)
             {
@@ -471,7 +452,7 @@ private readonly Action<string?>? _passwordStore;
             txtMyKeyId.Text = keyIdHex ?? string.Empty;
 
             btnExportPublic.Enabled = _myEcdhPrivateKey != null;
-            btnTransferOwnership.Enabled = _myEcdhPrivateKey != null; // refined later
+            btnTransferOwnership.Enabled = _myEcdhPrivateKey != null;
         }
 
         // ============================================================
@@ -511,7 +492,6 @@ private readonly Action<string?>? _passwordStore;
                     return;
             }
 
-            // NEW recipient password (do NOT touch owner session password)
             if (!EnsureNewPasswordSet(out string pwNew))
                 return;
 
@@ -524,48 +504,12 @@ private readonly Action<string?>? _passwordStore;
                 HSTRYContainer.EcdhKeyFiles.SavePrivateKeyPkcs8Encrypted(ecdhPrivPath, ecdh, pwNew);
                 HSTRYContainer.EcdsaKeyFiles.SavePrivateKeyPkcs8Encrypted(signPrivPath, ecdsa, pwNew);
 
-                // Public: plaintext SPKI
+                // Public: plaintext
                 HSTRYContainer.EcdhKeyFiles.SavePublicKeySpki(ecdhPubPath, ecdh);
                 HSTRYContainer.EcdsaKeyFiles.SavePublicKeySpki(signPubPath, ecdsa);
 
-                var askAdd = MessageBox.Show(
-                    this,
-                    "Key set created.\n\nDo you want to add the new ECDH public key as a recipient now?",
-                    "Create key set",
-                    MessageBoxButtons.YesNo,
-                    MessageBoxIcon.Question,
-                    MessageBoxDefaultButton.Button1);
-
-                if (askAdd == DialogResult.Yes)
-                {
-                    if (_myEcdhPrivateKey == null || !_isOwnerKeyLoaded || _mySigningPrivateKey == null)
-                    {
-                        MessageBox.Show(this,
-                            "Load the owner ECDH private key and ensure the owner signing key exists (*.hstrysigpriv) to modify recipients.",
-                            "Create key set",
-                            MessageBoxButtons.OK,
-                            MessageBoxIcon.Warning);
-                    }
-                    else
-                    {
-                        using var pub = HSTRYContainer.EcdhKeyFiles.LoadPublicKeySpki(ecdhPubPath);
-                        _container.AddRecipient(_mySigningPrivateKey, pub);
-                        ContainerChanged = true;
-
-                        RefreshRecipientsList();
-                        RefreshBlocksList();
-                        UpdateMyRecipientStatusAndPermissions();
-
-                        MessageBox.Show(this,
-                            "Recipient added.\n\nNote: New recipients have NO block access by default.",
-                            "Create key set",
-                            MessageBoxButtons.OK,
-                            MessageBoxIcon.Information);
-                    }
-                }
-
                 MessageBox.Show(this,
-                    "Key set created successfully.\n\nYou can share the .hstrypub file with other users.",
+                    "Key set created successfully.\n\nShare the .hstrypub (and optionally .hstrysigpub) with other users.",
                     "Create key set",
                     MessageBoxButtons.OK,
                     MessageBoxIcon.Information);
@@ -616,7 +560,7 @@ private readonly Action<string?>? _passwordStore;
         {
             if (_container.Version != HSTRYContainer.CurrentVersion)
             {
-                MessageBox.Show(this, "This container is not V6.", "Transfer ownership",
+                MessageBox.Show(this, "This container is not V7.", "Transfer ownership",
                     MessageBoxButtons.OK, MessageBoxIcon.Warning);
                 return;
             }
@@ -707,7 +651,6 @@ private readonly Action<string?>? _passwordStore;
                         }, token);
                     });
 
-                // Switch dialog selection to new owner key (do NOT auto prompt; but cache pw so it can load if needed)
                 SelectedEcdhPrivateKeyPath = newEcdhPrivPath;
                 _sessionKeyPassword = pwNewOwner;
                 ClearLoadedKeys();
@@ -761,7 +704,7 @@ private readonly Action<string?>? _passwordStore;
             try
             {
                 using var pub = CreatePublicOnlyFromPrivate(_myEcdhPrivateKey!);
-                _container.AddRecipient(_mySigningPrivateKey!, pub);
+                _container.AddRecipient(_mySigningPrivateKey!, pub, recipientSigningPublicKeySpki: null);
 
                 ContainerChanged = true;
                 RefreshRecipientsList();
@@ -797,10 +740,39 @@ private readonly Action<string?>? _passwordStore;
             if (ofd.ShowDialog(this) != DialogResult.OK)
                 return;
 
+            string pubPath = ofd.FileName;
+            string sigPath = DeriveSigningPublicKeyPathFromEcdhPublic(pubPath);
+
+            byte[]? sigSpki = null;
+
+            if (File.Exists(sigPath))
+            {
+                var ask = MessageBox.Show(
+                    this,
+                    "A matching signing public key (*.hstrysigpub) was found.\n\nInclude it for this recipient?",
+                    "Add recipient",
+                    MessageBoxButtons.YesNo,
+                    MessageBoxIcon.Question,
+                    MessageBoxDefaultButton.Button1);
+
+                if (ask == DialogResult.Yes)
+                {
+                    try
+                    {
+                        using var sigPub = HSTRYContainer.EcdsaKeyFiles.LoadPublicKeySpki(sigPath);
+                        sigSpki = sigPub.ExportSubjectPublicKeyInfo();
+                    }
+                    catch
+                    {
+                        sigSpki = null;
+                    }
+                }
+            }
+
             try
             {
-                using var pub = HSTRYContainer.EcdhKeyFiles.LoadPublicKeySpki(ofd.FileName);
-                _container.AddRecipient(_mySigningPrivateKey!, pub);
+                using var pub = HSTRYContainer.EcdhKeyFiles.LoadPublicKeySpki(pubPath);
+                _container.AddRecipient(_mySigningPrivateKey!, pub, sigSpki);
 
                 ContainerChanged = true;
                 RefreshRecipientsList();
@@ -825,7 +797,7 @@ private readonly Action<string?>? _passwordStore;
 
             var res = MessageBox.Show(
                 this,
-                "Remove the selected recipient from this container?\n\nThis does NOT automatically revoke existing block access.\nUse 'Revoke all' if you want to remove all block rights for this recipient.",
+                "Remove the selected recipient from this container?\n\nThis does NOT automatically revoke existing block access.\nUse 'Revoke all' to remove all block rights for this recipient.",
                 "Remove recipient",
                 MessageBoxButtons.YesNo,
                 MessageBoxIcon.Warning,
@@ -870,13 +842,15 @@ private readonly Action<string?>? _passwordStore;
                 {
                     string keyIdHex = Convert.ToHexString(r.KeyId);
                     string alg = r.Alg == 1 ? "ECDH-HKDF-SHA256-AESGCM" : $"Alg-{r.Alg}";
-                    string len = (r.WrappedDek?.Length ?? 0).ToString(CultureInfo.InvariantCulture);
-                    string spkiLen = (r.PublicKeySpki?.Length ?? 0).ToString(CultureInfo.InvariantCulture);
+                    string wrappedLen = (r.WrappedDek?.Length ?? 0).ToString(CultureInfo.InvariantCulture);
+                    string ecdhLen = (r.PublicKeySpki?.Length ?? 0).ToString(CultureInfo.InvariantCulture);
+                    string sigLen = (r.SigningPublicKeySpki?.Length ?? 0).ToString(CultureInfo.InvariantCulture);
 
                     var it = new ListViewItem(keyIdHex);
                     it.SubItems.Add(alg);
-                    it.SubItems.Add(len);
-                    it.SubItems.Add(spkiLen);
+                    it.SubItems.Add(wrappedLen);
+                    it.SubItems.Add(ecdhLen);
+                    it.SubItems.Add(sigLen);
 
                     it.Tag = keyIdHex;
                     lvwRecipients.Items.Add(it);
@@ -894,21 +868,19 @@ private readonly Action<string?>? _passwordStore;
             bool included = hasEcdh && _container.Recipients.Any(r =>
                 Convert.ToHexString(r.KeyId).Equals(_myKeyIdHex!, StringComparison.OrdinalIgnoreCase));
 
-            bool isV6 = _container.Version == HSTRYContainer.CurrentVersion;
-
-            bool canModify = hasEcdh && _isOwnerKeyLoaded && isV6 && _mySigningPrivateKey != null;
+            bool isV7 = _container.Version == HSTRYContainer.CurrentVersion;
+            bool canModify = hasEcdh && _isOwnerKeyLoaded && isV7 && _mySigningPrivateKey != null;
 
             btnAddRecipient.Enabled = canModify;
             btnRemoveRecipient.Enabled = canModify;
             btnAddMyself.Enabled = canModify && !included;
-
-            btnTransferOwnership.Enabled = canModify; // ownership also needs both keys
+            btnTransferOwnership.Enabled = canModify;
 
             bool hasRecipientSelection = lvwRecipients.SelectedItems.Count > 0;
             bool hasBlockSelection = lvwBlocks.SelectedItems.Count > 0;
             bool hasAnyBlocks = _container.Blocks.Count > 0;
 
-            grpBlockAccess.Enabled = isV6;
+            grpBlockAccess.Enabled = isV7;
 
             btnGrantRead.Enabled = canModify && hasRecipientSelection && hasBlockSelection;
             btnRevokeAccess.Enabled = canModify && hasRecipientSelection && hasBlockSelection;
@@ -924,9 +896,9 @@ private readonly Action<string?>? _passwordStore;
                 return;
             }
 
-            if (!isV6)
+            if (!isV7)
             {
-                lblMyRecipientStatus.Text = "Key loaded. This container is not V6.";
+                lblMyRecipientStatus.Text = "Key loaded. This container is not V7.";
                 lblMyRecipientStatus.ForeColor = Color.DarkRed;
                 return;
             }
@@ -940,29 +912,19 @@ private readonly Action<string?>? _passwordStore;
                     return;
                 }
 
-                if (included)
-                {
-                    lblMyRecipientStatus.Text = "Owner key loaded. Your key is included as a recipient.";
-                    lblMyRecipientStatus.ForeColor = Color.DarkGreen;
-                }
-                else
-                {
-                    lblMyRecipientStatus.Text = "Owner key loaded, but your key is NOT a recipient. You can add yourself.";
-                    lblMyRecipientStatus.ForeColor = Color.DarkRed;
-                }
+                lblMyRecipientStatus.Text = included
+                    ? "Owner key loaded. Your key is included as a recipient."
+                    : "Owner key loaded, but your key is NOT a recipient. You can add yourself.";
+
+                lblMyRecipientStatus.ForeColor = included ? Color.DarkGreen : Color.DarkRed;
             }
             else
             {
-                if (included)
-                {
-                    lblMyRecipientStatus.Text = "Recipient key loaded (read-only). You are not the owner.";
-                    lblMyRecipientStatus.ForeColor = Color.DarkGoldenrod;
-                }
-                else
-                {
-                    lblMyRecipientStatus.Text = "Key loaded, but it is not a recipient and not the owner.";
-                    lblMyRecipientStatus.ForeColor = Color.DarkRed;
-                }
+                lblMyRecipientStatus.Text = included
+                    ? "Recipient key loaded (read-only). You are not the owner."
+                    : "Key loaded, but it is not a recipient and not the owner.";
+
+                lblMyRecipientStatus.ForeColor = included ? Color.DarkGoldenrod : Color.DarkRed;
             }
         }
 
@@ -1002,7 +964,7 @@ private readonly Action<string?>? _passwordStore;
 
                 if (_container.Version != HSTRYContainer.CurrentVersion)
                 {
-                    lblBlockAccessHint.Text = "Block access control requires V6.";
+                    lblBlockAccessHint.Text = "Block access control requires V7.";
                     return;
                 }
 
@@ -1047,13 +1009,13 @@ private readonly Action<string?>? _passwordStore;
         }
 
         // ============================================================
-        // Selected-only operations (sync)
+        // Block operations
         // ============================================================
         private void UiGrantReadSelectedBlock()
         {
             if (_container.Version != HSTRYContainer.CurrentVersion)
             {
-                MessageBox.Show(this, "Block access control requires V6.", "Block access",
+                MessageBox.Show(this, "Block access control requires V7.", "Block access",
                     MessageBoxButtons.OK, MessageBoxIcon.Warning);
                 return;
             }
@@ -1075,7 +1037,7 @@ private readonly Action<string?>? _passwordStore;
             if (!int.TryParse(lvwBlocks.SelectedItems[0].Text, NumberStyles.Integer, CultureInfo.InvariantCulture, out int idx))
                 return;
 
-            if (idx < 0 || idx >= _container.Blocks.Count)
+            if ((uint)idx >= (uint)_container.Blocks.Count)
                 return;
 
             try
@@ -1098,7 +1060,7 @@ private readonly Action<string?>? _passwordStore;
         {
             if (_container.Version != HSTRYContainer.CurrentVersion)
             {
-                MessageBox.Show(this, "Block access control requires V6.", "Block access",
+                MessageBox.Show(this, "Block access control requires V7.", "Block access",
                     MessageBoxButtons.OK, MessageBoxIcon.Warning);
                 return;
             }
@@ -1133,14 +1095,11 @@ private readonly Action<string?>? _passwordStore;
             }
         }
 
-        // ============================================================
-        // Bulk operations (async + reporterDiag)
-        // ============================================================
         private async Task UiGrantReadAllBlocksAsync()
         {
             if (_container.Version != HSTRYContainer.CurrentVersion)
             {
-                MessageBox.Show(this, "Block access control requires V6.", "Block access",
+                MessageBox.Show(this, "Block access control requires V7.", "Block access",
                     MessageBoxButtons.OK, MessageBoxIcon.Warning);
                 return;
             }
@@ -1215,7 +1174,7 @@ private readonly Action<string?>? _passwordStore;
         {
             if (_container.Version != HSTRYContainer.CurrentVersion)
             {
-                MessageBox.Show(this, "Block access control requires V6.", "Block access",
+                MessageBox.Show(this, "Block access control requires V7.", "Block access",
                     MessageBoxButtons.OK, MessageBoxIcon.Warning);
                 return;
             }
@@ -1290,7 +1249,7 @@ private readonly Action<string?>? _passwordStore;
         {
             if (_container.Version != HSTRYContainer.CurrentVersion)
             {
-                MessageBox.Show(this, "Block access control requires V6.", "Block access",
+                MessageBox.Show(this, "Block access control requires V7.", "Block access",
                     MessageBoxButtons.OK, MessageBoxIcon.Warning);
                 return;
             }
@@ -1363,8 +1322,5 @@ private readonly Action<string?>? _passwordStore;
 
             _sessionKeyPassword = null;
         }
-
-
-
     }
 }

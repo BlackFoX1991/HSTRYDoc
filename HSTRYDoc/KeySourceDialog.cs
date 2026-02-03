@@ -86,8 +86,13 @@ namespace HSTRYDoc
         {
             var result = new List<string>();
 
-            foreach (var d in DriveInfo.GetDrives())
+            DriveInfo[] drives;
+            try { drives = DriveInfo.GetDrives(); }
+            catch { return result; }
+
+            foreach (var d in drives)
             {
+                // You asked "optional USB/HSTRY_KEY" – include only removable by default.
                 if (d.DriveType != DriveType.Removable) continue;
                 if (!d.IsReady) continue;
 
@@ -96,7 +101,7 @@ namespace HSTRYDoc
 
                 try
                 {
-                    // Top-level only; change to AllDirectories if you want recursion.
+                    // Encrypted private keys are still *.hstrypriv
                     result.AddRange(Directory.GetFiles(dir, "*.hstrypriv", SearchOption.TopDirectoryOnly));
                 }
                 catch
@@ -105,7 +110,6 @@ namespace HSTRYDoc
                 }
             }
 
-            // stable ordering
             return result
                 .Distinct(StringComparer.OrdinalIgnoreCase)
                 .OrderBy(p => p, StringComparer.OrdinalIgnoreCase)
@@ -131,18 +135,15 @@ namespace HSTRYDoc
 
         private void UpdateUi()
         {
-            // Status lines
             bool defExists = !string.IsNullOrWhiteSpace(_defaultKeyPath) && File.Exists(_defaultKeyPath);
             lblDefaultStatus.Text = defExists ? "Status: Found" : "Status: Not found";
 
             bool usbHasItems = lstUsbKeys.Items.Count > 0;
             lblUsbStatus.Text = usbHasItems ? $"Status: {lstUsbKeys.Items.Count} key(s) found" : "Status: No keys found";
 
-            // Enable/disable panels
             pnlUsb.Enabled = radioUsb.Checked;
             pnlManual.Enabled = radioManual.Checked;
 
-            // Determine selected path + OK availability
             string? selected = null;
 
             if (radioDefault.Checked)
@@ -165,7 +166,6 @@ namespace HSTRYDoc
 
             btnOk.Enabled = SelectedPrivateKeyPath != null;
 
-            // Give a helpful hint
             if (radioDefault.Checked && !defExists)
                 lblHint.Text = "The default key is missing. Choose USB or Manual.";
             else if (radioUsb.Checked && !usbHasItems)
@@ -186,6 +186,7 @@ namespace HSTRYDoc
             }
 
             DialogResult = DialogResult.OK;
+            Close();
         }
     }
 }

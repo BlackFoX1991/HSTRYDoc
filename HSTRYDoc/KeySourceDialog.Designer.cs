@@ -38,25 +38,24 @@
 
         private void InitializeComponent()
         {
-            System.ComponentModel.ComponentResourceManager resources = new System.ComponentModel.ComponentResourceManager(typeof(KeySourceDialog));
-            lblIntro = new Label();
-            grpSource = new GroupBox();
-            radioDefault = new RadioButton();
-            lblDefaultPathCaption = new Label();
-            lblDefaultPath = new Label();
-            lblDefaultStatus = new Label();
-            radioUsb = new RadioButton();
-            pnlUsb = new Panel();
-            lstUsbKeys = new ListBox();
-            btnRescan = new Button();
-            lblUsbStatus = new Label();
-            radioManual = new RadioButton();
-            pnlManual = new Panel();
-            txtManualPath = new TextBox();
-            btnBrowse = new Button();
-            lblHint = new Label();
-            btnOk = new Button();
-            btnCancel = new Button();
+            lblIntro = new System.Windows.Forms.Label();
+            grpSource = new System.Windows.Forms.GroupBox();
+            radioDefault = new System.Windows.Forms.RadioButton();
+            lblDefaultPathCaption = new System.Windows.Forms.Label();
+            lblDefaultPath = new System.Windows.Forms.Label();
+            lblDefaultStatus = new System.Windows.Forms.Label();
+            radioUsb = new System.Windows.Forms.RadioButton();
+            pnlUsb = new System.Windows.Forms.Panel();
+            lstUsbKeys = new System.Windows.Forms.ListBox();
+            btnRescan = new System.Windows.Forms.Button();
+            lblUsbStatus = new System.Windows.Forms.Label();
+            radioManual = new System.Windows.Forms.RadioButton();
+            pnlManual = new System.Windows.Forms.Panel();
+            txtManualPath = new System.Windows.Forms.TextBox();
+            btnBrowse = new System.Windows.Forms.Button();
+            lblHint = new System.Windows.Forms.Label();
+            btnOk = new System.Windows.Forms.Button();
+            btnCancel = new System.Windows.Forms.Button();
             grpSource.SuspendLayout();
             pnlUsb.SuspendLayout();
             pnlManual.SuspendLayout();
@@ -64,9 +63,9 @@
             // 
             // lblIntro
             // 
-            lblIntro.Location = new Point(12, 12);
+            lblIntro.Location = new System.Drawing.Point(12, 12);
             lblIntro.Name = "lblIntro";
-            lblIntro.Size = new Size(660, 40);
+            lblIntro.Size = new System.Drawing.Size(660, 40);
             lblIntro.TabIndex = 0;
             lblIntro.Text = "A private key is required to open this container.\r\nChoose where to load the key from.";
             // 
@@ -80,9 +79,9 @@
             grpSource.Controls.Add(pnlUsb);
             grpSource.Controls.Add(radioManual);
             grpSource.Controls.Add(pnlManual);
-            grpSource.Location = new Point(12, 58);
+            grpSource.Location = new System.Drawing.Point(12, 58);
             grpSource.Name = "grpSource";
-            grpSource.Size = new Size(660, 290);
+            grpSource.Size = new System.Drawing.Size(660, 290);
             grpSource.TabIndex = 1;
             grpSource.TabStop = false;
             grpSource.Text = "Key source";
@@ -90,42 +89,42 @@
             // radioDefault
             // 
             radioDefault.Checked = true;
-            radioDefault.Location = new Point(16, 24);
+            radioDefault.Location = new System.Drawing.Point(16, 24);
             radioDefault.Name = "radioDefault";
-            radioDefault.Size = new Size(220, 22);
+            radioDefault.Size = new System.Drawing.Size(300, 22);
             radioDefault.TabIndex = 0;
             radioDefault.TabStop = true;
             radioDefault.Text = "Use default key (Security_Keys)";
             // 
             // lblDefaultPathCaption
             // 
-            lblDefaultPathCaption.Location = new Point(36, 48);
+            lblDefaultPathCaption.Location = new System.Drawing.Point(36, 48);
             lblDefaultPathCaption.Name = "lblDefaultPathCaption";
-            lblDefaultPathCaption.Size = new Size(90, 18);
+            lblDefaultPathCaption.Size = new System.Drawing.Size(90, 18);
             lblDefaultPathCaption.TabIndex = 1;
             lblDefaultPathCaption.Text = "Default path:";
             // 
             // lblDefaultPath
             // 
-            lblDefaultPath.Location = new Point(128, 48);
+            lblDefaultPath.Location = new System.Drawing.Point(128, 48);
             lblDefaultPath.Name = "lblDefaultPath";
-            lblDefaultPath.Size = new Size(510, 18);
+            lblDefaultPath.Size = new System.Drawing.Size(510, 18);
             lblDefaultPath.TabIndex = 2;
             lblDefaultPath.Text = "<default_path>";
             // 
             // lblDefaultStatus
             // 
-            lblDefaultStatus.Location = new Point(128, 68);
+            lblDefaultStatus.Location = new System.Drawing.Point(128, 68);
             lblDefaultStatus.Name = "lblDefaultStatus";
-            lblDefaultStatus.Size = new Size(510, 18);
+            lblDefaultStatus.Size = new System.Drawing.Size(510, 18);
             lblDefaultStatus.TabIndex = 3;
             lblDefaultStatus.Text = "Status: <unknown>";
             // 
             // radioUsb
             // 
-            radioUsb.Location = new Point(16, 96);
+            radioUsb.Location = new System.Drawing.Point(16, 96);
             radioUsb.Name = "radioUsb";
-            radioUsb.Size = new Size(360, 22);
+            radioUsb.Size = new System.Drawing.Size(420, 22);
             radioUsb.TabIndex = 4;
             radioUsb.Text = "Use key from USB drive folder HSTRY_KEY";
             // 
@@ -134,39 +133,39 @@
             pnlUsb.Controls.Add(lstUsbKeys);
             pnlUsb.Controls.Add(btnRescan);
             pnlUsb.Controls.Add(lblUsbStatus);
-            pnlUsb.Location = new Point(36, 120);
+            pnlUsb.Location = new System.Drawing.Point(36, 120);
             pnlUsb.Name = "pnlUsb";
-            pnlUsb.Size = new Size(602, 72);
+            pnlUsb.Size = new System.Drawing.Size(602, 72);
             pnlUsb.TabIndex = 5;
             // 
             // lstUsbKeys
             // 
-            lstUsbKeys.Location = new Point(0, 0);
+            lstUsbKeys.Location = new System.Drawing.Point(0, 0);
             lstUsbKeys.Name = "lstUsbKeys";
-            lstUsbKeys.Size = new Size(480, 44);
+            lstUsbKeys.Size = new System.Drawing.Size(480, 44);
             lstUsbKeys.TabIndex = 0;
             // 
             // btnRescan
             // 
-            btnRescan.Location = new Point(492, 0);
+            btnRescan.Location = new System.Drawing.Point(492, 0);
             btnRescan.Name = "btnRescan";
-            btnRescan.Size = new Size(110, 28);
+            btnRescan.Size = new System.Drawing.Size(110, 28);
             btnRescan.TabIndex = 1;
             btnRescan.Text = "Rescan";
             // 
             // lblUsbStatus
             // 
-            lblUsbStatus.Location = new Point(492, 34);
+            lblUsbStatus.Location = new System.Drawing.Point(492, 34);
             lblUsbStatus.Name = "lblUsbStatus";
-            lblUsbStatus.Size = new Size(110, 36);
+            lblUsbStatus.Size = new System.Drawing.Size(110, 36);
             lblUsbStatus.TabIndex = 2;
             lblUsbStatus.Text = "Status: <unknown>";
             // 
             // radioManual
             // 
-            radioManual.Location = new Point(16, 200);
+            radioManual.Location = new System.Drawing.Point(16, 200);
             radioManual.Name = "radioManual";
-            radioManual.Size = new Size(220, 22);
+            radioManual.Size = new System.Drawing.Size(220, 22);
             radioManual.TabIndex = 6;
             radioManual.Text = "Select key file manually";
             // 
@@ -174,68 +173,67 @@
             // 
             pnlManual.Controls.Add(txtManualPath);
             pnlManual.Controls.Add(btnBrowse);
-            pnlManual.Location = new Point(36, 224);
+            pnlManual.Location = new System.Drawing.Point(36, 224);
             pnlManual.Name = "pnlManual";
-            pnlManual.Size = new Size(602, 40);
+            pnlManual.Size = new System.Drawing.Size(602, 40);
             pnlManual.TabIndex = 7;
             // 
             // txtManualPath
             // 
-            txtManualPath.Location = new Point(0, 8);
+            txtManualPath.Location = new System.Drawing.Point(0, 8);
             txtManualPath.Name = "txtManualPath";
             txtManualPath.ReadOnly = true;
-            txtManualPath.Size = new Size(480, 27);
+            txtManualPath.Size = new System.Drawing.Size(480, 27);
             txtManualPath.TabIndex = 0;
             // 
             // btnBrowse
             // 
-            btnBrowse.Location = new Point(492, 6);
+            btnBrowse.Location = new System.Drawing.Point(492, 6);
             btnBrowse.Name = "btnBrowse";
-            btnBrowse.Size = new Size(110, 28);
+            btnBrowse.Size = new System.Drawing.Size(110, 28);
             btnBrowse.TabIndex = 1;
             btnBrowse.Text = "Browse...";
             // 
             // lblHint
             // 
-            lblHint.Location = new Point(12, 356);
+            lblHint.Location = new System.Drawing.Point(12, 356);
             lblHint.Name = "lblHint";
-            lblHint.Size = new Size(660, 22);
+            lblHint.Size = new System.Drawing.Size(660, 22);
             lblHint.TabIndex = 2;
             lblHint.Text = "Click OK to continue.";
             // 
             // btnOk
             // 
-            btnOk.Location = new Point(516, 386);
+            btnOk.Location = new System.Drawing.Point(516, 386);
             btnOk.Name = "btnOk";
-            btnOk.Size = new Size(75, 28);
+            btnOk.Size = new System.Drawing.Size(75, 28);
             btnOk.TabIndex = 3;
             btnOk.Text = "OK";
             // 
             // btnCancel
             // 
-            btnCancel.Location = new Point(597, 386);
+            btnCancel.Location = new System.Drawing.Point(597, 386);
             btnCancel.Name = "btnCancel";
-            btnCancel.Size = new Size(75, 28);
+            btnCancel.Size = new System.Drawing.Size(75, 28);
             btnCancel.TabIndex = 4;
             btnCancel.Text = "Cancel";
             // 
             // KeySourceDialog
             // 
-            AutoScaleDimensions = new SizeF(8F, 20F);
-            AutoScaleMode = AutoScaleMode.Font;
-            ClientSize = new Size(684, 426);
+            AutoScaleDimensions = new System.Drawing.SizeF(8F, 20F);
+            AutoScaleMode = System.Windows.Forms.AutoScaleMode.Font;
+            ClientSize = new System.Drawing.Size(684, 426);
             Controls.Add(lblIntro);
             Controls.Add(grpSource);
             Controls.Add(lblHint);
             Controls.Add(btnOk);
             Controls.Add(btnCancel);
-            FormBorderStyle = FormBorderStyle.FixedDialog;
-            Icon = (Icon)resources.GetObject("$this.Icon");
+            FormBorderStyle = System.Windows.Forms.FormBorderStyle.FixedDialog;
             MaximizeBox = false;
             MinimizeBox = false;
             Name = "KeySourceDialog";
             ShowInTaskbar = false;
-            StartPosition = FormStartPosition.CenterParent;
+            StartPosition = System.Windows.Forms.FormStartPosition.CenterParent;
             Text = "Private key";
             Load += KeySourceDialog_Load;
             grpSource.ResumeLayout(false);

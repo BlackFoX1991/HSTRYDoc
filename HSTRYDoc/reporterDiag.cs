@@ -89,8 +89,8 @@ namespace HSTRYDoc
         {
             if (work == null) throw new ArgumentNullException(nameof(work));
 
-            // Disable owner to mimic modal behavior, but keep UI thread free for await.
-            if (owner is Control cOwner) cOwner.Enabled = false;
+            if (owner is Control cOwner)
+                cOwner.Enabled = false;
 
             using var dlg = new reporterDiag
             {
@@ -100,32 +100,53 @@ namespace HSTRYDoc
                 TopMost = true
             };
 
-            // Show modeless (owner disabled)
             dlg.Show(owner);
 
             var progress = dlg.CreateProgress();
 
             try
             {
-                // Always start with marquee unless work sets a determinate state
                 progress.Report(new UiProgress { Message = "Working…", Indeterminate = true });
-
-                // Run work
-                T result = await work(progress, dlg.Token);
-                return result;
+                return await work(progress, dlg.Token);
             }
             finally
             {
-                // Close dialog on UI thread
+                void CloseAndReenable()
+                {
+                    try
+                    {
+                        if (!dlg.IsDisposed)
+                            dlg.Close();
+                    }
+                    catch { /* ignore */ }
+
+                    if (owner is Control cOwner2)
+                        cOwner2.Enabled = true;
+                }
+
                 try
                 {
-                    if (!dlg.IsDisposed)
-                        dlg.Close();
+                    if (dlg.IsDisposed)
+                    {
+                        if (owner is Control cOwner3)
+                            cOwner3.Enabled = true;
+                    }
+                    else if (dlg.InvokeRequired)
+                    {
+                        dlg.BeginInvoke(new Action(CloseAndReenable));
+                    }
+                    else
+                    {
+                        CloseAndReenable();
+                    }
                 }
-                catch { /* ignore */ }
-
-                if (owner is Control cOwner2) cOwner2.Enabled = true;
+                catch
+                {
+                    if (owner is Control cOwner4)
+                        cOwner4.Enabled = true;
+                }
             }
         }
+
     }
 }

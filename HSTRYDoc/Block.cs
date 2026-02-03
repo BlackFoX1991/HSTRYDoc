@@ -1,10 +1,10 @@
-﻿// Block.cs (V6 in-memory)
-// - V6 fields used:
+﻿// Block.cs (V7 in-memory)
+// - V7 fields used:
 //   - KeySlots + TitleNonce/TitleTag/TitleCiphertext + Nonce/Tag/Ciphertext
 // - Per-block access control via BEK (Block Encryption Key, 32 bytes) and KeySlots.
 // - KeySlots store: KeyId (SHA256(ECDH SPKI), 32 bytes) + Rights + Alg + WrappedBek(envelope).
 // - Alg:
-//   - 1 = ECDH(P-384) + HKDF-SHA256 + AES-GCM key-wrap envelope (bound to containerId in V6)
+//   - 1 = ECDH(P-384) + HKDF-SHA256 + AES-GCM key-wrap envelope (bound to containerId in V7)
 
 using System;
 using System.Collections.Generic;
@@ -26,7 +26,7 @@ namespace HSTRYDoc
 
         public BlockRights Rights { get; set; } = BlockRights.None;
 
-        // 1 = ECDH-HKDF-SHA256-AESGCM envelope (V6: bound to containerId)
+        // 1 = ECDH-HKDF-SHA256-AESGCM envelope (V7: bound to containerId)
         public byte Alg { get; set; }
 
         // Wrapped 32-byte BEK as an envelope blob (format depends on Alg)
@@ -37,27 +37,33 @@ namespace HSTRYDoc
     {
         public int Index { get; internal set; }
 
+        // Plaintext title in memory only (hydrated during Validate() when readable)
         public string Title { get; internal set; } = string.Empty;
 
         public DateTimeOffset CreatedUtc { get; internal set; } = DateTimeOffset.UtcNow;
         public DateTimeOffset ModifiedUtc { get; internal set; } = DateTimeOffset.UtcNow;
 
+        // 32 bytes SHA-256 hash chain
         public byte[] PrevHash { get; internal set; } = new byte[Crypto.Sha256Size];
 
-        // Per-block access control (V6)
+        // Per-block access control (V7)
         public List<BlockKeySlot> KeySlots { get; } = new();
 
+        // In-memory only (not stored):
         internal byte[]? BlockKey { get; set; } = null; // decrypted BEK for active user (32 bytes)
         internal BlockRights MyRights { get; set; } = BlockRights.None;
 
-        public byte[] TitleNonce { get; internal set; } = Array.Empty<byte>();
-        public byte[] TitleTag { get; internal set; } = Array.Empty<byte>();
-        public byte[] TitleCiphertext { get; internal set; } = Array.Empty<byte>();
+        // AES-GCM payload for title
+        public byte[] TitleNonce { get; internal set; } = Array.Empty<byte>();      // 12 bytes
+        public byte[] TitleTag { get; internal set; } = Array.Empty<byte>();        // 16 bytes
+        public byte[] TitleCiphertext { get; internal set; } = Array.Empty<byte>(); // n bytes
 
-        public byte[] Nonce { get; internal set; } = Array.Empty<byte>();
-        public byte[] Tag { get; internal set; } = Array.Empty<byte>();
-        public byte[] Ciphertext { get; internal set; } = Array.Empty<byte>();
+        // AES-GCM payload for body
+        public byte[] Nonce { get; internal set; } = Array.Empty<byte>();      // 12 bytes
+        public byte[] Tag { get; internal set; } = Array.Empty<byte>();        // 16 bytes
+        public byte[] Ciphertext { get; internal set; } = Array.Empty<byte>(); // n bytes
 
+        // NOTE: payload size only (not full on-disk block size)
         public int StoredSizeBytes
         {
             get
