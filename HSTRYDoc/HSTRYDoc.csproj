@@ -8,7 +8,6 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <ApplicationIcon>secure-document-multisize.ico</ApplicationIcon>
     <ApplicationHighDpiMode>SystemAware</ApplicationHighDpiMode>
-    <ForceDesignerDpiUnaware>true</ForceDesignerDpiUnaware>
   </PropertyGroup>
 
   <ItemGroup>
