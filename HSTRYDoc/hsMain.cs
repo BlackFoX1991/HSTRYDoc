@@ -1388,8 +1388,26 @@ namespace HSTRYDoc
             if (_container == null) return false;
             if (!MaybeCommitCurrentBlock()) return false;
 
+            bool needsMainSave = true;
+
+            // Wenn noch kein Speicherpfad vorhanden: Save As ausführen (speichert bereits)
             if (string.IsNullOrWhiteSpace(_containerPath))
-                return await UiSaveContainerAsAsync();
+            {
+                bool savedAs = await UiSaveContainerAsAsync();
+                if (!savedAs) return false;
+                needsMainSave = false;
+            }
+
+            string mainPath = _containerPath!;
+
+            // Spiegel-Kopie in Private-Key-Ordner vorbereiten
+            string? mirrorPath = null;
+            if (!string.IsNullOrWhiteSpace(_ecdhPrivateKeyPath) && File.Exists(_ecdhPrivateKeyPath))
+            {
+                string? keyFolder = Path.GetDirectoryName(_ecdhPrivateKeyPath);
+                if (!string.IsNullOrWhiteSpace(keyFolder))
+                    mirrorPath = Path.Combine(keyFolder, Path.GetFileName(mainPath));
+            }
 
             try
             {
@@ -1400,12 +1418,40 @@ namespace HSTRYDoc
                     {
                         progress.Report(new UiProgress { Message = "Saving container ", Indeterminate = true });
 
-                        await Task.Run(() => _container.Save(_containerPath!), token);
+                        await Task.Run(() =>
+                        {
+                            // 1) Original speichern (nur wenn nicht bereits via Save As erledigt)
+                            if (needsMainSave)
+                                _container.Save(mainPath);
+
+                            // 2) Immer Kopie in Key-Ordner (wenn möglich), überschreiben erlaubt
+                            if (!string.IsNullOrWhiteSpace(mirrorPath))
+                            {
+                                string src = Path.GetFullPath(mainPath);
+                                string dst = Path.GetFullPath(mirrorPath);
+
+                                // Nicht auf sich selbst kopieren
+                                if (!string.Equals(src, dst, StringComparison.OrdinalIgnoreCase))
+                                    File.Copy(src, dst, overwrite: true);
+                            }
+                        }, token);
+
                         return new object();
                     });
 
                 _containerDirty = false;
                 UpdateUiState();
+
+                // Falls keine Spiegelkopie möglich war, nur Hinweis (Hauptspeichern ist trotzdem erfolgt)
+                if (string.IsNullOrWhiteSpace(mirrorPath))
+                {
+                    MessageBox.Show(this,
+                        "Container saved.\n\nMirror copy was skipped because no valid private-key path is available.",
+                        "Save container",
+                        MessageBoxButtons.OK,
+                        MessageBoxIcon.Information);
+                }
+
                 return true;
             }
             catch (OperationCanceledException)
@@ -3794,22 +3840,6 @@ namespace HSTRYDoc
             // optional:
             lblScaleLabel.Text = $"{reset}%";
         }
-
-        private void ApplyEditorZoomFromScaleBar()
-        {
-            float z = rtfScaleBar.Value / 100f;
-            z = Math.Clamp(z, 0.1f, 64f);
-
-            rtfMainText.ZoomFactor = z;
-            lblScaleLabel.Text = $"{rtfScaleBar.Value}%";
-        }
-
-        // ============================================================
-        // Password helpers (session-cached)
-        // ============================================================
-        // ============================================================
-        // Password helpers (session-cached)
-        // ============================================================
         private bool EnsureSessionPasswordPrompt(out string password)
         {
             password = _sessionKeyPassword ?? string.Empty;
@@ -3833,6 +3863,27 @@ namespace HSTRYDoc
             password = pw;
             return true;
         }
+
+        private string GetContainerSavePathInKeyFolder()
+        {
+            if (string.IsNullOrWhiteSpace(_ecdhPrivateKeyPath))
+                throw new InvalidOperationException("No ECDH private key configured.");
+
+            string? keyDir = Path.GetDirectoryName(_ecdhPrivateKeyPath);
+            if (string.IsNullOrWhiteSpace(keyDir))
+                throw new InvalidOperationException("Private key folder could not be resolved.");
+
+            // Dateiname beibehalten, sonst Default
+            string fileName = string.IsNullOrWhiteSpace(_containerPath)
+                ? "container.hstry"
+                : Path.GetFileName(_containerPath);
+
+            if (!fileName.EndsWith(".hstry", StringComparison.OrdinalIgnoreCase))
+                fileName = Path.ChangeExtension(fileName, ".hstry");
+
+            return Path.Combine(keyDir, fileName);
+        }
+
 
         private bool EnsureNewPasswordSet(out string password)
         {
