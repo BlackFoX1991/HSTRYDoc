@@ -40,6 +40,7 @@
                 foreach (var h in _hits)
                 {
                     var item = new ListViewItem(h.BlockTitle);
+                    item.SubItems.Add((h.IndexInText + 1).ToString());
                     item.SubItems.Add(h.Snippet);
                     item.Tag = h;
                     lvResults.Items.Add(item);

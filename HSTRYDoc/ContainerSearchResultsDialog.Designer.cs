@@ -6,6 +6,7 @@
 
         private System.Windows.Forms.ListView lvResults;
         private System.Windows.Forms.ColumnHeader colBlock;
+        private System.Windows.Forms.ColumnHeader colPosition;
         private System.Windows.Forms.ColumnHeader colSnippet;
         private System.Windows.Forms.Button btnOpen;
         private System.Windows.Forms.Button btnClose;
@@ -21,6 +22,7 @@
             System.ComponentModel.ComponentResourceManager resources = new System.ComponentModel.ComponentResourceManager(typeof(ContainerSearchResultsDialog));
             lvResults = new ListView();
             colBlock = new ColumnHeader();
+            colPosition = new ColumnHeader();
             colSnippet = new ColumnHeader();
             btnOpen = new Button();
             btnClose = new Button();
@@ -29,7 +31,7 @@
             // lvResults
             // 
             lvResults.Anchor = AnchorStyles.Top | AnchorStyles.Bottom | AnchorStyles.Left | AnchorStyles.Right;
-            lvResults.Columns.AddRange(new ColumnHeader[] { colBlock, colSnippet });
+            lvResults.Columns.AddRange(new ColumnHeader[] { colBlock, colPosition, colSnippet });
             lvResults.FullRowSelect = true;
             lvResults.GridLines = true;
             lvResults.Location = new Point(12, 12);
@@ -44,10 +46,15 @@
             colBlock.Text = "Block";
             colBlock.Width = 180;
             // 
+            // colPosition
+            // 
+            colPosition.Text = "Pos";
+            colPosition.Width = 70;
+            // 
             // colSnippet
             // 
             colSnippet.Text = "Snippet";
-            colSnippet.Width = 530;
+            colSnippet.Width = 460;
             // 
             // btnOpen
             // 

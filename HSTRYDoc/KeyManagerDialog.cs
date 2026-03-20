@@ -793,6 +793,20 @@ namespace HSTRYDoc
             if (!EnsureKeysLoadedForAction(requireOwner: true, requireSigningKey: true, showErrors: true))
                 return;
 
+            var selectedRecipient = GetSelectedRecipient();
+            if (selectedRecipient == null)
+                return;
+
+            if (selectedRecipient.KeyId.SequenceEqual(_container.OwnerKeyId))
+            {
+                MessageBox.Show(this,
+                    "The owner recipient cannot be removed.\n\nUse 'Transfer ownership' if a different owner should take over the container.",
+                    "Remove recipient",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Warning);
+                return;
+            }
+
             string keyIdHex = lvwRecipients.SelectedItems[0].Text;
 
             var res = MessageBox.Show(
@@ -870,13 +884,16 @@ namespace HSTRYDoc
 
             bool isV7 = _container.Version == HSTRYContainer.CurrentVersion;
             bool canModify = hasEcdh && _isOwnerKeyLoaded && isV7 && _mySigningPrivateKey != null;
+            RecipientEntry? selectedRecipient = GetSelectedRecipient();
+            bool hasRecipientSelection = selectedRecipient != null;
+            bool selectedRecipientIsOwner = hasRecipientSelection &&
+                selectedRecipient!.KeyId.SequenceEqual(_container.OwnerKeyId);
 
             btnAddRecipient.Enabled = canModify;
-            btnRemoveRecipient.Enabled = canModify;
+            btnRemoveRecipient.Enabled = canModify && hasRecipientSelection && !selectedRecipientIsOwner;
             btnAddMyself.Enabled = canModify && !included;
             btnTransferOwnership.Enabled = canModify;
 
-            bool hasRecipientSelection = lvwRecipients.SelectedItems.Count > 0;
             bool hasBlockSelection = lvwBlocks.SelectedItems.Count > 0;
             bool hasAnyBlocks = _container.Blocks.Count > 0;
 

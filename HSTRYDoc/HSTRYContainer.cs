@@ -486,15 +486,44 @@ namespace HSTRYDoc
         // ============================================================
         public void Save(string path)
         {
-            using var fs = new FileStream(path, FileMode.Create, FileAccess.Write, FileShare.None, bufferSize: 1 << 20);
-            using var bs = new BufferedStream(fs, 1 << 20);
-            Save(bs);
+            if (string.IsNullOrWhiteSpace(path))
+                throw new ArgumentException("A valid target path is required.", nameof(path));
+
+            string fullPath = Path.GetFullPath(path);
+            string? directory = Path.GetDirectoryName(fullPath);
+            if (!string.IsNullOrWhiteSpace(directory))
+                Directory.CreateDirectory(directory);
+
+            string tempPath = CreateTemporarySavePath(fullPath);
+            string recoveryPath = GetRecoveryFilePath(fullPath);
+
+            try
+            {
+                using (var fs = new FileStream(tempPath, FileMode.CreateNew, FileAccess.Write, FileShare.None, bufferSize: 1 << 20))
+                using (var bs = new BufferedStream(fs, 1 << 20))
+                {
+                    Save(bs);
+                    bs.Flush();
+                    fs.Flush(flushToDisk: true);
+                }
+
+                if (File.Exists(fullPath))
+                    File.Replace(tempPath, fullPath, recoveryPath, ignoreMetadataErrors: true);
+                else
+                    File.Move(tempPath, fullPath);
+            }
+            catch
+            {
+                TryDeleteFile(tempPath);
+                throw;
+            }
         }
 
         public void Save(Stream stream)
         {
             EnsureKey();
             EnsureHeaderSigned();
+            EnsureOwnerRecipientPresent();
 
             using var bw = new BinaryWriter(stream, Encoding.UTF8, leaveOpen: true);
 
@@ -613,6 +642,34 @@ namespace HSTRYDoc
             bw.Write(b.Ciphertext);
         }
 
+        internal static string GetRecoveryFilePath(string path)
+        {
+            if (string.IsNullOrWhiteSpace(path))
+                throw new ArgumentException("A valid path is required.", nameof(path));
+
+            return Path.GetFullPath(path) + ".recovery";
+        }
+
+        private static string CreateTemporarySavePath(string fullPath)
+        {
+            string directory = Path.GetDirectoryName(fullPath) ?? Environment.CurrentDirectory;
+            string fileName = Path.GetFileName(fullPath);
+            return Path.Combine(directory, $".{fileName}.{Guid.NewGuid():N}.tmp");
+        }
+
+        private static void TryDeleteFile(string path)
+        {
+            try
+            {
+                if (!string.IsNullOrWhiteSpace(path) && File.Exists(path))
+                    File.Delete(path);
+            }
+            catch
+            {
+                // ignore cleanup failures
+            }
+        }
+
         // ============================================================
         // Recipient management (header signed by owner ECDSA)
         // ============================================================
@@ -665,6 +722,9 @@ namespace HSTRYDoc
             byte[] keyId;
             try { keyId = Convert.FromHexString(keyIdHex); }
             catch { return false; }
+
+            if (keyId.SequenceEqual(OwnerKeyId))
+                throw new InvalidOperationException("The owner recipient entry cannot be removed. Transfer ownership first if needed.");
 
             int removed = _recipients.RemoveAll(r => r.KeyId.SequenceEqual(keyId));
             if (removed > 0)
@@ -953,6 +1013,9 @@ namespace HSTRYDoc
         {
             EnsureKey();
 
+            if (!IsOpenedAsOwner)
+                throw new UnauthorizedAccessException("Only the container owner can create new blocks.");
+
             if (_activeKeyId == null || _activeKeyId.Length == 0)
                 _activeKeyId = OwnerKeyId;
 
@@ -1063,17 +1126,34 @@ namespace HSTRYDoc
 
             EnsureWritableFrom(index);
 
+            int affectedCount = _blocks.Count - (index + 1);
+            string[] trailingTitles = new string[affectedCount];
+            byte[][] trailingBodies = new byte[affectedCount][];
+
+            for (int i = index + 1; i < _blocks.Count; i++)
+            {
+                var block = _blocks[i];
+                trailingTitles[i - index - 1] = DecryptTitleV7OrThrow(block);
+                trailingBodies[i - index - 1] = DecryptBodyV7OrThrow(block);
+            }
+
             _blocks.RemoveAt(index);
 
             if (_blocks.Count == 0)
                 return;
 
             for (int i = index; i < _blocks.Count; i++)
-                _blocks[i].Index = i;
+            {
+                var block = _blocks[i];
+                block.Index = i;
+                block.PrevHash = i == 0 ? ZeroHash.ToArray() : ComputeBlockHash(_blocks[i - 1]);
 
-            _blocks[0].PrevHash = ZeroHash.ToArray();
+                string title = trailingTitles[i - index];
+                byte[] body = trailingBodies[i - index];
 
-            ReencryptFromV7(index);
+                EncryptTitleIntoV7(block, block.BlockKey!, title);
+                EncryptBodyIntoV7(block, block.BlockKey!, body);
+            }
         }
 
         public void RenameBlock(int index, string newTitle)
@@ -1370,12 +1450,14 @@ namespace HSTRYDoc
         {
             if (_blocks.Count == 0) return;
 
-            if (startIndex <= 0) startIndex = 1;
+            if (startIndex < 0) startIndex = 0;
             if (startIndex >= _blocks.Count) return;
 
             EnsureWritableFrom(startIndex);
 
-            byte[] prevHash = ComputeBlockHash(_blocks[startIndex - 1]);
+            byte[] prevHash = startIndex == 0
+                ? ZeroHash.ToArray()
+                : ComputeBlockHash(_blocks[startIndex - 1]);
 
             for (int i = startIndex; i < _blocks.Count; i++)
             {
@@ -1387,7 +1469,7 @@ namespace HSTRYDoc
                 string titlePt = DecryptTitleV7OrThrow(cur);
                 byte[] bodyPt = DecryptBodyV7OrThrow(cur);
 
-                cur.PrevHash = prevHash;
+                cur.PrevHash = i == 0 ? ZeroHash.ToArray() : prevHash;
 
                 EncryptTitleIntoV7(cur, cur.BlockKey, titlePt);
                 EncryptBodyIntoV7(cur, cur.BlockKey, bodyPt);
@@ -1453,6 +1535,12 @@ namespace HSTRYDoc
                 throw new InvalidOperationException("Invalid container version in memory.");
             if (ContainerId == null || ContainerId.Length != ContainerIdSize)
                 throw new InvalidOperationException("ContainerId missing/invalid in memory.");
+        }
+
+        private void EnsureOwnerRecipientPresent()
+        {
+            if (!_recipients.Any(r => r.KeyId.SequenceEqual(OwnerKeyId)))
+                throw new InvalidOperationException("The owner recipient entry is missing.");
         }
 
         public void CloseKeyMaterial()

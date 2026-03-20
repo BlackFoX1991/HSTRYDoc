@@ -39,6 +39,7 @@ namespace HSTRYDoc
 
         private bool _updatingFontSizeUi = false;
         private bool _updatingParagraphUi = false;
+        private bool _updatingRtfUi = false;
 
         private readonly AppState _appState = AppState.Load();
 
@@ -74,10 +75,23 @@ namespace HSTRYDoc
         private bool _lastFindWholeWord = false;
         private bool _lastFindWrap = true;
 
+        private const int EditorPageBaseWidth = 860;
+        private const int EditorPageBaseHeight = 1180;
+        private const int EditorPageBaseMarginX = 58;
+        private const int EditorPageBaseMarginY = 64;
+        private const int EditorWorkspacePadding = 22;
+
+        private ToolStripStatusLabel? _statusZoomValueLabel;
+        private ToolStripControlHost? _statusZoomTrackHost;
+        private ToolStripStatusLabel? _statusSpringLabel;
+
 
         public hsMain()
         {
             InitializeComponent();
+            ConfigureEditorWorkspace();
+            ConfigureStatusStripZoomUi();
+
             if (Global.Testmode)
             {
                 this.toolStripSeparator5.Visible = true;
@@ -98,6 +112,150 @@ namespace HSTRYDoc
             tmr.Start();
 
 
+        }
+
+        private void ConfigureEditorWorkspace()
+        {
+            panel1.SuspendLayout();
+            mainshadowPanel.SuspendLayout();
+            try
+            {
+                panel1.AutoScroll = true;
+                panel1.BackColor = Color.FromArgb(243, 245, 248);
+                panel1.BorderStyle = BorderStyle.None;
+                panel1.Padding = Padding.Empty;
+
+                splitContainer1.Panel2.BackColor = panel1.BackColor;
+
+                mainshadowPanel.Dock = DockStyle.None;
+                mainshadowPanel.Anchor = AnchorStyles.Top;
+                mainshadowPanel.BackColor = Color.Transparent;
+                mainshadowPanel.ShadowSize = 12;
+                mainshadowPanel.ShadowOffsetX = 5;
+                mainshadowPanel.ShadowOffsetY = 5;
+                mainshadowPanel.MaxAlpha = 44;
+                mainshadowPanel.CornerRadius = 0;
+                mainshadowPanel.PageBackColor = Color.White;
+                mainshadowPanel.PageBorderColor = Color.FromArgb(226, 229, 234);
+
+                pnlScales.Visible = false;
+
+                rtfMainText.Dock = DockStyle.None;
+                rtfMainText.BackColor = Color.White;
+                rtfMainText.BorderStyle = BorderStyle.None;
+                rtfMainText.ScrollBars = RichTextBoxScrollBars.Vertical;
+
+                panel1.Resize += (_, __) => UpdateEditorPageView();
+            }
+            finally
+            {
+                mainshadowPanel.ResumeLayout();
+                panel1.ResumeLayout();
+            }
+
+            UpdateEditorPageView();
+        }
+
+        private void ConfigureStatusStripZoomUi()
+        {
+            _statusSpringLabel = new ToolStripStatusLabel
+            {
+                Spring = true
+            };
+
+            _statusZoomValueLabel = new ToolStripStatusLabel
+            {
+                Text = "100%",
+                IsLink = true,
+                LinkBehavior = LinkBehavior.NeverUnderline,
+                ActiveLinkColor = Color.FromArgb(48, 87, 173),
+                LinkColor = Color.FromArgb(48, 87, 173),
+                Margin = new Padding(0, 0, 8, 0)
+            };
+            _statusZoomValueLabel.Click += btnResetScale_Click;
+
+            if (rtfScaleBar.Parent != null)
+                rtfScaleBar.Parent.Controls.Remove(rtfScaleBar);
+
+            rtfScaleBar.AutoSize = false;
+            rtfScaleBar.BackColor = statusStrip1.BackColor;
+            rtfScaleBar.TickStyle = TickStyle.None;
+            rtfScaleBar.Size = new Size(170, 18);
+            rtfScaleBar.Margin = Padding.Empty;
+
+            _statusZoomTrackHost = new ToolStripControlHost(rtfScaleBar)
+            {
+                AutoSize = false,
+                Margin = new Padding(0, 0, 4, 0),
+                Padding = Padding.Empty,
+                Size = new Size(170, 20)
+            };
+
+            statusStrip1.SizingGrip = false;
+            statusStrip1.Padding = new Padding(8, 0, 10, 0);
+            statusStrip1.MinimumSize = new Size(0, 30);
+            statusStrip1.Items.Clear();
+            statusStrip1.Items.Add(ContainerSizeLabel);
+            statusStrip1.Items.Add(_statusSpringLabel);
+            statusStrip1.Items.Add(_statusZoomValueLabel);
+            statusStrip1.Items.Add(_statusZoomTrackHost);
+
+            ApplyEditorZoomFromTrackBar();
+        }
+
+        private void UpdateEditorPageView()
+        {
+            if (panel1.IsDisposed || mainshadowPanel.IsDisposed || rtfMainText.IsDisposed)
+                return;
+
+            float zoom = Math.Clamp(rtfScaleBar.Value / 100f, 0.1f, 64f);
+
+            int pageWidth = Math.Max(220, (int)Math.Round(EditorPageBaseWidth * zoom));
+            int pageHeight = Math.Max(300, (int)Math.Round(EditorPageBaseHeight * zoom));
+
+            mainshadowPanel.Size = new Size(
+                pageWidth + mainshadowPanel.Padding.Horizontal,
+                pageHeight + mainshadowPanel.Padding.Vertical);
+
+            int marginX = Math.Max(16, (int)Math.Round(EditorPageBaseMarginX * zoom));
+            int marginY = Math.Max(18, (int)Math.Round(EditorPageBaseMarginY * zoom));
+
+            rtfMainText.Bounds = new Rectangle(
+                mainshadowPanel.Padding.Left + marginX,
+                mainshadowPanel.Padding.Top + marginY,
+                Math.Max(120, pageWidth - (marginX * 2)),
+                Math.Max(160, pageHeight - (marginY * 2)));
+
+            panel1.AutoScrollMinSize = new Size(
+                mainshadowPanel.Width + (EditorWorkspacePadding * 2),
+                mainshadowPanel.Height + (EditorWorkspacePadding * 2));
+
+            int scrollbarAllowance = panel1.AutoScrollMinSize.Height > panel1.ClientSize.Height
+                ? SystemInformation.VerticalScrollBarWidth
+                : 0;
+            int availableWidth = Math.Max(0, panel1.ClientSize.Width - scrollbarAllowance);
+            int centeredX = (availableWidth - mainshadowPanel.Width) / 2;
+
+            mainshadowPanel.Location = new Point(
+                Math.Max(EditorWorkspacePadding, centeredX),
+                EditorWorkspacePadding);
+
+            mainshadowPanel.Invalidate();
+        }
+
+        private void ApplyEditorZoomFromTrackBar()
+        {
+            float zoom = rtfScaleBar.Value / 100f;
+            zoom = Math.Clamp(zoom, 0.1f, 64f);
+
+            rtfMainText.ZoomFactor = zoom;
+
+            string zoomText = $"{rtfScaleBar.Value}%";
+            lblScaleLabel.Text = zoomText;
+            if (_statusZoomValueLabel != null)
+                _statusZoomValueLabel.Text = zoomText;
+
+            UpdateEditorPageView();
         }
 
         private async void UiKeyManagement()
@@ -1138,6 +1296,8 @@ namespace HSTRYDoc
 
             // Update toolbar state when selection changes
             rtfMainText.SelectionChanged += (_, __) => UpdateRtfUiFromSelection();
+            rtfMainText.Enter += (_, __) => UpdateRtfUiFromSelection();
+            ctxRtf.Opening += (_, __) => UpdateRtfUiFromSelection();
 
             // Shortcuts in editor
             rtfMainText.KeyDown += RtfMainText_KeyDown;
@@ -1159,14 +1319,15 @@ namespace HSTRYDoc
         private void UpdateUiState()
         {
             bool hasContainer = _container != null;
+            bool canCreateBlocks = hasContainer && _container!.IsOpenedAsOwner;
 
             saveContainerToolStripButton.Enabled = hasContainer;
             saveContainerToolStripMenuItem.Enabled = hasContainer;
             saveContainerAsToolStripMenuItem.Enabled = hasContainer;
 
-            newBlockToolStripButton.Enabled = hasContainer;
-            newToolStripMenuItem.Enabled = hasContainer;
-            newBlockToolStripMenuItem.Enabled = hasContainer;
+            newBlockToolStripButton.Enabled = canCreateBlocks;
+            newToolStripMenuItem.Enabled = canCreateBlocks;
+            newBlockToolStripMenuItem.Enabled = canCreateBlocks;
 
             renameBlockToolStripMenuItem.Enabled = hasContainer && _currentBlockIndex >= 0;
             removeBlockToolStripMenuItem.Enabled = hasContainer && _currentBlockIndex >= 0;
@@ -1178,6 +1339,7 @@ namespace HSTRYDoc
 
             // NEW: Title logic centralized
             UpdateWindowTitle();
+            UpdateRtfCommandAvailability();
         }
 
 
@@ -1390,7 +1552,7 @@ namespace HSTRYDoc
 
             bool needsMainSave = true;
 
-            // Wenn noch kein Speicherpfad vorhanden: Save As ausführen (speichert bereits)
+            // When no save path exists yet, run Save As first (it already saves).
             if (string.IsNullOrWhiteSpace(_containerPath))
             {
                 bool savedAs = await UiSaveContainerAsAsync();
@@ -1424,7 +1586,7 @@ namespace HSTRYDoc
                             if (needsMainSave)
                                 _container.Save(mainPath);
 
-                            // 2) Immer Kopie in Key-Ordner (wenn möglich), überschreiben erlaubt
+                            // 2) Always mirror a copy into the key folder when possible.
                             if (!string.IsNullOrWhiteSpace(mirrorPath))
                             {
                                 string src = Path.GetFullPath(mainPath);
@@ -1442,7 +1604,7 @@ namespace HSTRYDoc
                 _containerDirty = false;
                 UpdateUiState();
 
-                // Falls keine Spiegelkopie möglich war, nur Hinweis (Hauptspeichern ist trotzdem erfolgt)
+                // If no mirror copy was possible, only show an informational hint.
                 if (string.IsNullOrWhiteSpace(mirrorPath))
                 {
                     MessageBox.Show(this,
@@ -1537,6 +1699,16 @@ namespace HSTRYDoc
                         UiNewBlock();
                     }));
                 });
+                return;
+            }
+
+            if (!_container.IsOpenedAsOwner)
+            {
+                MessageBox.Show(this,
+                    "Only the container owner can create new blocks.\n\nLoad the owner ECDH private key first.",
+                    "New block",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Warning);
                 return;
             }
 
@@ -1897,41 +2069,52 @@ namespace HSTRYDoc
             if (_container == null) return;
             if (lvwBlocks.IsDisposed) return;
 
+            var container = _container;
+            Block[] blocks = container.Blocks.ToArray();
+
             _hashFillCts?.Cancel();
             _hashFillCts?.Dispose();
             _hashFillCts = new CancellationTokenSource();
 
             CancellationToken token = _hashFillCts.Token;
-
-            int count = _container.Blocks.Count;
+            int count = blocks.Length;
 
             _ = Task.Run(() =>
             {
-                const int batchSize = 25;
-                var batch = new List<(int index, string hex)>(batchSize);
-
-                for (int i = 0; i < count; i++)
+                try
                 {
-                    token.ThrowIfCancellationRequested();
+                    const int batchSize = 25;
+                    var batch = new List<(int index, string hex)>(batchSize);
 
-                    string hex = Convert.ToHexString(_container!.ComputeBlockHash(_container.Blocks[i]));
-                    batch.Add((i, hex));
-
-                    if (batch.Count >= batchSize)
+                    for (int i = 0; i < count; i++)
                     {
-                        // IMPORTANT: snapshot copy to avoid "Collection was modified"
+                        token.ThrowIfCancellationRequested();
+
+                        string hex = Convert.ToHexString(container.ComputeBlockHash(blocks[i]));
+                        batch.Add((i, hex));
+
+                        if (batch.Count >= batchSize)
+                        {
+                            var snapshot = batch.ToArray();
+                            PostBatchToUi(snapshot);
+                            batch.Clear();
+                        }
+                    }
+
+                    if (batch.Count > 0)
+                    {
                         var snapshot = batch.ToArray();
                         PostBatchToUi(snapshot);
-                        batch.Clear();
                     }
                 }
-
-                if (batch.Count > 0)
+                catch (OperationCanceledException)
                 {
-                    var snapshot = batch.ToArray();
-                    PostBatchToUi(snapshot);
+                    // Expected when the list is rebuilt or the container changes.
                 }
-
+                catch
+                {
+                    // Best-effort UI hashing: ignore stale background failures.
+                }
             }, token);
 
             void PostBatchToUi((int index, string hex)[] updates)
@@ -1944,7 +2127,7 @@ namespace HSTRYDoc
                     BeginInvoke(new Action(() =>
                     {
                         if (token.IsCancellationRequested) return;
-                        if (_container == null) return;
+                        if (!ReferenceEquals(container, _container)) return;
                         if (lvwBlocks.IsDisposed) return;
 
                         int itemCount = lvwBlocks.Items.Count;
@@ -1976,6 +2159,8 @@ namespace HSTRYDoc
             if (_container == null) return;
             if (item == null) return;
 
+            var container = _container;
+
             // Hash column index 1 (Name is 0)
             if (item.SubItems.Count < 2) return;
 
@@ -1987,7 +2172,9 @@ namespace HSTRYDoc
             if (looksComputed) return;
 
             if (item.Tag is not int idx) return;
-            if (idx < 0 || idx >= _container.Blocks.Count) return;
+            if (idx < 0 || idx >= container.Blocks.Count) return;
+
+            Block block = container.Blocks[idx];
 
             // Cancel previous ongoing hash
             _hashCts?.Cancel();
@@ -2002,16 +2189,25 @@ namespace HSTRYDoc
                 string hex = await Task.Run(() =>
                 {
                     token.ThrowIfCancellationRequested();
-                    byte[] h = _container.ComputeBlockHash(_container.Blocks[idx]);
+                    byte[] h = container.ComputeBlockHash(block);
                     return Convert.ToHexString(h);
                 }, token);
 
-                if (!token.IsCancellationRequested)
+                if (!token.IsCancellationRequested &&
+                    ReferenceEquals(container, _container) &&
+                    item.ListView == lvwBlocks &&
+                    item.SubItems.Count >= 2)
                     item.SubItems[1].Text = hex;
+            }
+            catch (OperationCanceledException)
+            {
             }
             catch
             {
-                if (!token.IsCancellationRequested)
+                if (!token.IsCancellationRequested &&
+                    ReferenceEquals(container, _container) &&
+                    item.ListView == lvwBlocks &&
+                    item.SubItems.Count >= 2)
                     item.SubItems[1].Text = "";
             }
         }
@@ -2154,15 +2350,24 @@ namespace HSTRYDoc
                                     Value = i + 1
                                 });
 
-                                string rtf = _container.GetRtfDocument(i);
+                                string rtf;
+                                try
+                                {
+                                    rtf = _container.GetRtfDocument(i);
+                                }
+                                catch (UnauthorizedAccessException)
+                                {
+                                    continue;
+                                }
+
                                 tmp.Rtf = rtf ?? string.Empty;
                                 string text = tmp.Text ?? string.Empty;
 
-                                int idx = FindIndex(text, query, dlg.MatchCase, dlg.WholeWord);
-                                if (idx >= 0)
+                                IReadOnlyList<TextSearchMatch> matches = TextSearch.FindAll(text, query, dlg.MatchCase, dlg.WholeWord);
+                                foreach (TextSearchMatch match in matches)
                                 {
-                                    string snippet = BuildSnippet(text, idx, query.Length, 40);
-                                    hits.Add(new ContainerSearchHit(i, _container.Blocks[i].Title, idx, snippet));
+                                    string snippet = TextSearch.BuildSnippet(text, match.Index, match.Length, 40);
+                                    hits.Add(new ContainerSearchHit(i, _container.Blocks[i].Title, match.Index, match.Length, snippet));
                                 }
                             }
 
@@ -2190,7 +2395,7 @@ namespace HSTRYDoc
                     return;
 
                 LoadBlockIntoEditor(hit.BlockIndex);
-                FindNextInEditor(query, dlg.MatchCase, dlg.WholeWord, wrap: true);
+                SelectSearchHitInEditor(hit);
             }
             catch (OperationCanceledException)
             {
@@ -2229,38 +2434,17 @@ namespace HSTRYDoc
             rtfMainText.Focus();
         }
 
-        private static int FindIndex(string haystack, string needle, bool matchCase, bool wholeWord)
+        private void SelectSearchHitInEditor(ContainerSearchHit hit)
         {
-            if (string.IsNullOrEmpty(needle)) return -1;
+            int start = Math.Max(0, Math.Min(hit.IndexInText, rtfMainText.TextLength));
+            int length = Math.Max(0, Math.Min(hit.MatchLength, rtfMainText.TextLength - start));
 
-            StringComparison comparison = matchCase ? StringComparison.CurrentCulture : StringComparison.CurrentCultureIgnoreCase;
-            int idx = haystack.IndexOf(needle, comparison);
-            if (idx < 0) return -1;
+            if (length == 0)
+                return;
 
-            if (!wholeWord) return idx;
-
-            static bool IsWordChar(char c) =>
-                char.IsLetterOrDigit(c) || c == '_' ||
-                c == ' ' || c == ' ' || c == ' ' ||
-                c == ' ' || c == ' ' || c == ' ' || c == ' ';
-
-            int left = idx - 1;
-            int right = idx + needle.Length;
-
-            if (left >= 0 && IsWordChar(haystack[left])) return -1;
-            if (right < haystack.Length && IsWordChar(haystack[right])) return -1;
-
-            return idx;
-        }
-
-        private static string BuildSnippet(string text, int index, int length, int context)
-        {
-            int start = Math.Max(0, index - context);
-            int end = Math.Min(text.Length, index + length + context);
-            string snippet = text.Substring(start, end - start).Replace("\r", " ").Replace("\n", " ");
-            if (start > 0) snippet = " " + snippet;
-            if (end < text.Length) snippet = snippet + " ";
-            return snippet;
+            rtfMainText.Select(start, length);
+            rtfMainText.ScrollToCaret();
+            rtfMainText.Focus();
         }
 
         private static void IndentSelectionByTab(RichTextBox rtb)
@@ -2501,46 +2685,211 @@ namespace HSTRYDoc
 
         private void UpdateRtfUiFromSelection()
         {
-            if (_updatingParagraphUi) return;
+            if (_updatingRtfUi) return;
 
-            Font f = rtfMainText.SelectionFont ?? rtfMainText.Font;
+            _updatingRtfUi = true;
+            try
+            {
+                bool hasActiveEditor = HasActiveEditor();
+                UpdateRtfCommandAvailability();
 
-            boldToolButton.Checked = f.Bold;
-            ItalicToolButton.Checked = f.Italic;
-            UnderlineToolButton.Checked = f.Underline;
-            StrikeTroughToolButton.Checked = f.Strikeout;
+                if (!hasActiveEditor)
+                {
+                    ResetRtfUiDisplayState();
+                    return;
+                }
+
+                if (_updatingParagraphUi)
+                    return;
+
+                CharFormat displayFormat = GetDisplayCharFormatForUi();
+                Font f = displayFormat.Font;
+
+                boldToolButton.Checked = f.Bold;
+                ItalicToolButton.Checked = f.Italic;
+                UnderlineToolButton.Checked = f.Underline;
+                StrikeTroughToolButton.Checked = f.Strikeout;
+
+                boldToolStripMenuItem.Checked = f.Bold;
+                italicToolStripMenuItem.Checked = f.Italic;
+                underlineToolStripMenuItem.Checked = f.Underline;
+                strikeToolStripMenuItem.Checked = f.Strikeout;
+
+                foreColorToolButton.Tag = displayFormat.Fore;
+                backgroundColorToolButton.Tag = displayFormat.Back;
+
+                toolButtonFontstyle.ToolTipText = $"Choose Font... ({f.FontFamily.Name}, {FormatFontSizeForUi(f.Size)} pt)";
+
+                _updatingFontSizeUi = true;
+                try
+                {
+                    FontSizeComboBox.Text = FormatFontSizeForUi(f.Size);
+                }
+                finally
+                {
+                    _updatingFontSizeUi = false;
+                }
+
+                // Paragraph UI (alignment + bullets + numbering)
+                _updatingParagraphUi = true;
+                try
+                {
+                    HorizontalAlignment al = rtfMainText.SelectionAlignment;
+
+                    if (toolButtonAlignLeft != null) toolButtonAlignLeft.Checked = (al == HorizontalAlignment.Left);
+                    if (toolButtonAlignCenter != null) toolButtonAlignCenter.Checked = (al == HorizontalAlignment.Center);
+                    if (toolButtonAlignRight != null) toolButtonAlignRight.Checked = (al == HorizontalAlignment.Right);
+
+                    if (toolStripButtonBullets != null) toolStripButtonBullets.Checked = rtfMainText.SelectionBullet;
+
+                    ushort numbering = GetCurrentParagraphNumbering(rtfMainText);
+                    bool numericOn = numbering != PFN_NONE;
+
+                    if (toolButtonBulletsNumeric != null) toolButtonBulletsNumeric.Checked = numericOn;
+                }
+                finally
+                {
+                    _updatingParagraphUi = false;
+                }
+            }
+            finally
+            {
+                _updatingRtfUi = false;
+            }
+        }
+
+        private void UpdateRtfCommandAvailability()
+        {
+            bool hasActiveEditor = HasActiveEditor();
+            bool hasText = hasActiveEditor && rtfMainText.TextLength > 0;
+            bool hasSelection = hasActiveEditor && rtfMainText.SelectionLength > 0;
+            bool canPaste = hasActiveEditor && ClipboardHasPasteData();
+
+            copyToolStripMenuItem1.Enabled = hasSelection;
+            toolButtonCopy.Enabled = hasSelection;
+
+            cutToolStripMenuItem1.Enabled = hasSelection;
+            toolButtonCut.Enabled = hasSelection;
+
+            pasteToolStripMenuItem1.Enabled = canPaste;
+            toolButtonPaste.Enabled = canPaste;
+
+            selectAllToolStripMenuItem1.Enabled = hasText;
+            toolButtonSelectAll.Enabled = hasText;
+
+            boldToolStripMenuItem.Enabled = hasActiveEditor;
+            italicToolStripMenuItem.Enabled = hasActiveEditor;
+            underlineToolStripMenuItem.Enabled = hasActiveEditor;
+            strikeToolStripMenuItem.Enabled = hasActiveEditor;
+            forecolorToolStripMenuItem.Enabled = hasActiveEditor;
+            textBackgroundcolorToolStripMenuItem.Enabled = hasActiveEditor;
+
+            boldToolButton.Enabled = hasActiveEditor;
+            ItalicToolButton.Enabled = hasActiveEditor;
+            UnderlineToolButton.Enabled = hasActiveEditor;
+            StrikeTroughToolButton.Enabled = hasActiveEditor;
+            toolButtonFontstyle.Enabled = hasActiveEditor;
+            FontSizeComboBox.Enabled = hasActiveEditor;
+            btnFontSizeMns.Enabled = hasActiveEditor;
+            btnFontSizePls.Enabled = hasActiveEditor;
+            toolButtonAlignLeft.Enabled = hasActiveEditor;
+            toolButtonAlignCenter.Enabled = hasActiveEditor;
+            toolButtonAlignRight.Enabled = hasActiveEditor;
+            dropDownHeader.Enabled = hasActiveEditor;
+            toolStripButtonBullets.Enabled = hasActiveEditor;
+            toolButtonBulletsNumeric.Enabled = hasActiveEditor;
+            foreColorToolButton.Enabled = hasActiveEditor;
+            backgroundColorToolButton.Enabled = hasActiveEditor;
+            toolTableInsert.Enabled = hasActiveEditor;
+        }
+
+        private void ResetRtfUiDisplayState()
+        {
+            boldToolButton.Checked = false;
+            ItalicToolButton.Checked = false;
+            UnderlineToolButton.Checked = false;
+            StrikeTroughToolButton.Checked = false;
+
+            boldToolStripMenuItem.Checked = false;
+            italicToolStripMenuItem.Checked = false;
+            underlineToolStripMenuItem.Checked = false;
+            strikeToolStripMenuItem.Checked = false;
+
+            toolButtonAlignLeft.Checked = false;
+            toolButtonAlignCenter.Checked = false;
+            toolButtonAlignRight.Checked = false;
+            toolStripButtonBullets.Checked = false;
+            toolButtonBulletsNumeric.Checked = false;
+
+            toolButtonFontstyle.ToolTipText = "Choose Font...";
+
+            foreColorToolButton.Tag = Color.Red;
+            backgroundColorToolButton.Tag = Color.Yellow;
 
             _updatingFontSizeUi = true;
             try
             {
-                FontSizeComboBox.Text = ((int)Math.Round(f.Size)).ToString(CultureInfo.InvariantCulture);
+                FontSizeComboBox.Text = FormatFontSizeForUi(rtfMainText.Font.Size);
             }
             finally
             {
                 _updatingFontSizeUi = false;
             }
+        }
 
-            // Paragraph UI (alignment + bullets + numbering)
-            _updatingParagraphUi = true;
+        private bool HasActiveEditor()
+        {
+            return !IsDisposed &&
+                   _container != null &&
+                   _currentBlockIndex >= 0 &&
+                   splitContainer1.Panel2.Enabled &&
+                   !rtfMainText.IsDisposed;
+        }
+
+        private CharFormat GetDisplayCharFormatForUi()
+        {
+            if (rtfMainText.IsDisposed)
+                return new CharFormat(Font, ForeColor, BackColor);
+
+            if (rtfMainText.TextLength == 0)
+            {
+                Font baseFont = rtfMainText.SelectionFont ?? rtfMainText.Font;
+                return new CharFormat(baseFont, rtfMainText.SelectionColor, rtfMainText.SelectionBackColor);
+            }
+
+            if (rtfMainText.SelectionFont != null)
+                return new CharFormat(rtfMainText.SelectionFont, rtfMainText.SelectionColor, rtfMainText.SelectionBackColor);
+
+            int probePos = rtfMainText.SelectionLength > 0
+                ? rtfMainText.SelectionStart
+                : Math.Max(0, Math.Min(rtfMainText.SelectionStart, rtfMainText.TextLength - 1));
+
+            if (rtfMainText.SelectionLength == 0 && probePos == rtfMainText.TextLength && probePos > 0)
+                probePos--;
+
+            return GetCharFormat(rtfMainText, probePos);
+        }
+
+        private static string FormatFontSizeForUi(float size)
+        {
+            float rounded = (float)Math.Round(size, 2);
+            bool isWholeNumber = Math.Abs(rounded - MathF.Round(rounded)) < 0.01f;
+            return isWholeNumber
+                ? ((int)MathF.Round(rounded)).ToString(CultureInfo.InvariantCulture)
+                : rounded.ToString("0.##", CultureInfo.InvariantCulture);
+        }
+
+        private static bool ClipboardHasPasteData()
+        {
             try
             {
-                HorizontalAlignment al = rtfMainText.SelectionAlignment;
-
-                if (toolButtonAlignLeft != null) toolButtonAlignLeft.Checked = (al == HorizontalAlignment.Left);
-                if (toolButtonAlignCenter != null) toolButtonAlignCenter.Checked = (al == HorizontalAlignment.Center);
-                if (toolButtonAlignRight != null) toolButtonAlignRight.Checked = (al == HorizontalAlignment.Right);
-
-                if (toolStripButtonBullets != null) toolStripButtonBullets.Checked = rtfMainText.SelectionBullet;
-
-                // Numeric list state (read from RichEdit paragraph format)
-                ushort numbering = GetCurrentParagraphNumbering(rtfMainText);
-                bool numericOn = numbering != PFN_NONE;
-
-                if (toolButtonBulletsNumeric != null) toolButtonBulletsNumeric.Checked = numericOn;
+                return Clipboard.ContainsText(TextDataFormat.Rtf) ||
+                       Clipboard.ContainsText(TextDataFormat.UnicodeText) ||
+                       Clipboard.ContainsText();
             }
-            finally
+            catch
             {
-                _updatingParagraphUi = false;
+                return false;
             }
         }
 
@@ -3734,7 +4083,7 @@ namespace HSTRYDoc
 
         private void toolButtonFontstyle_Click(object sender, EventArgs e)
         {
-            Font current = rtfMainText.SelectionFont ?? rtfMainText.Font;
+            Font current = GetDisplayCharFormatForUi().Font;
 
             using var fd = new FontDialog
             {
@@ -3744,101 +4093,44 @@ namespace HSTRYDoc
                 FontMustExist = true,
                 MinSize = 1,
                 MaxSize = 200
-                // Note: dialog also shows size/style, but we will apply only the font family.
             };
 
             if (fd.ShowDialog(this) != DialogResult.OK)
                 return;
 
-            ApplySelectionFontFamily(rtfMainText, fd.Font.FontFamily);
+            ApplySelectionFont(rtfMainText, fd.Font);
             UpdateRtfUiFromSelection();
         }
 
-        // Preserves size + style; applies new family safely (also for mixed selection)
-        private static void ApplySelectionFontFamily(RichTextBox rtb, FontFamily newFamily)
+        private static void ApplySelectionFont(RichTextBox rtb, Font selectedFont)
         {
             int start = rtb.SelectionStart;
             int len = rtb.SelectionLength;
 
-            // Cache fonts to reduce allocations in mixed selections
-            var cache = new Dictionary<(float Size, FontStyle Style), Font>();
-
-            Font GetCached(float size, FontStyle style)
-            {
-                var key = (Size: size, Style: style);
-                if (cache.TryGetValue(key, out var f))
-                    return f;
-
-                // Some families don't support all styles -> fallback safely
-                Font created;
-                try { created = new Font(newFamily, size, style); }
-                catch { created = new Font(newFamily, size, FontStyle.Regular); }
-
-                cache[key] = created;
-                return created;
-            }
-
             if (len == 0)
             {
-                Font baseFont = rtb.SelectionFont ?? rtb.Font;
-                rtb.SelectionFont = GetCached(baseFont.Size, baseFont.Style);
+                rtb.SelectionFont = selectedFont;
                 return;
             }
 
-            // Uniform selection
-            if (rtb.SelectionFont != null)
-            {
-                Font f = rtb.SelectionFont;
-                rtb.SelectionFont = GetCached(f.Size, f.Style);
-                rtb.Select(start, len);
-                return;
-            }
-
-            // Mixed selection -> per-character
-            rtb.SuspendLayout();
-            try
-            {
-                for (int i = 0; i < len; i++)
-                {
-                    rtb.Select(start + i, 1);
-                    Font f = rtb.SelectionFont ?? rtb.Font;
-                    rtb.SelectionFont = GetCached(f.Size, f.Style);
-                }
-
-                rtb.Select(start, len);
-                rtb.Focus();
-            }
-            finally
-            {
-                rtb.ResumeLayout();
-            }
+            rtb.SelectionFont = selectedFont;
+            rtb.Select(start, len);
+            rtb.Focus();
         }
 
         private void rtfScaleBar_Scroll(object sender, EventArgs e)
         {
-            float z = rtfScaleBar.Value / 100f;
-            z = Math.Clamp(z, 0.1f, 64f);
-            rtfMainText.ZoomFactor = z;
-            lblScaleLabel.Text = $"{rtfScaleBar.Value}%";
+            ApplyEditorZoomFromTrackBar();
         }
 
-        private void btnResetScale_Click(object sender, EventArgs e)
+        private void btnResetScale_Click(object? sender, EventArgs e)
         {
-            // Reset to 100%
             int reset = 100;
-
-            // keep within trackbar bounds (in case you changed min/max)
             if (reset < rtfScaleBar.Minimum) reset = rtfScaleBar.Minimum;
             if (reset > rtfScaleBar.Maximum) reset = rtfScaleBar.Maximum;
 
             rtfScaleBar.Value = reset;
-
-            float z = reset / 100f;
-            z = Math.Clamp(z, 0.1f, 64f);
-            rtfMainText.ZoomFactor = z;
-
-            // optional:
-            lblScaleLabel.Text = $"{reset}%";
+            ApplyEditorZoomFromTrackBar();
         }
         private bool EnsureSessionPasswordPrompt(out string password)
         {
@@ -3923,21 +4215,17 @@ namespace HSTRYDoc
 
         private void ResetEditorScaleTo100()
         {
-            // Ensure 100 is within bounds
             int reset = 100;
             if (reset < rtfScaleBar.Minimum) reset = rtfScaleBar.Minimum;
             if (reset > rtfScaleBar.Maximum) reset = rtfScaleBar.Maximum;
 
             rtfScaleBar.Value = reset;
-            lblScaleLabel.Text = $"{reset}%";
-
-            // Apply zoom (may still be overwritten by RTF internally, but you're resetting anyway)
-            rtfMainText.ZoomFactor = 1.0f;
+            ApplyEditorZoomFromTrackBar();
         }
 
 
 
     }
 
-    public sealed record ContainerSearchHit(int BlockIndex, string BlockTitle, int IndexInText, string Snippet);
+    public sealed record ContainerSearchHit(int BlockIndex, string BlockTitle, int IndexInText, int MatchLength, string Snippet);
 }

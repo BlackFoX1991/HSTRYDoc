@@ -1,14 +1,17 @@
-﻿using System.ComponentModel;
+using System.ComponentModel;
 using System.Drawing.Drawing2D;
 
 namespace HSTRYDoc;
 
 public sealed class ShadowPanel : Panel
 {
-    private int _shadowSize = 8;
-    private int _shadowOffsetX = 3;
-    private int _shadowOffsetY = 3;
-    private int _maxAlpha = 140;
+    private int _shadowSize = 12;
+    private int _shadowOffsetX = 5;
+    private int _shadowOffsetY = 5;
+    private int _maxAlpha = 44;
+    private int _cornerRadius = 0;
+    private Color _pageBackColor = Color.White;
+    private Color _pageBorderColor = Color.FromArgb(226, 229, 234);
 
     [DesignerSerializationVisibility(DesignerSerializationVisibility.Visible)]
     public int ShadowSize
@@ -38,12 +41,34 @@ public sealed class ShadowPanel : Panel
         set { _maxAlpha = Math.Clamp(value, 0, 255); Invalidate(); }
     }
 
+    [DesignerSerializationVisibility(DesignerSerializationVisibility.Visible)]
+    public int CornerRadius
+    {
+        get => _cornerRadius;
+        set { _cornerRadius = Math.Max(0, value); Invalidate(); }
+    }
+
+    [DesignerSerializationVisibility(DesignerSerializationVisibility.Visible)]
+    public Color PageBackColor
+    {
+        get => _pageBackColor;
+        set { _pageBackColor = value; Invalidate(); }
+    }
+
+    [DesignerSerializationVisibility(DesignerSerializationVisibility.Visible)]
+    public Color PageBorderColor
+    {
+        get => _pageBorderColor;
+        set { _pageBorderColor = value; Invalidate(); }
+    }
+
     public ShadowPanel()
     {
         SetStyle(ControlStyles.UserPaint |
                  ControlStyles.AllPaintingInWmPaint |
                  ControlStyles.OptimizedDoubleBuffer |
-                 ControlStyles.ResizeRedraw, true);
+                 ControlStyles.ResizeRedraw |
+                 ControlStyles.SupportsTransparentBackColor, true);
 
         BackColor = Color.Transparent;
         UpdatePadding();
@@ -51,59 +76,115 @@ public sealed class ShadowPanel : Panel
 
     private void UpdatePadding()
     {
-        // Schatten auf allen Seiten: links/oben mind. ShadowSize,
-        // rechts/unten ShadowSize + Offset (weil du den Schatten nach rechts/unten schiebst)
         Padding = new Padding(
-            left: _shadowSize,
-            top: _shadowSize,
+            left: 1,
+            top: 1,
             right: _shadowSize + _shadowOffsetX,
-            bottom: _shadowSize + _shadowOffsetY
-        );
+            bottom: _shadowSize + _shadowOffsetY);
     }
 
     protected override void OnPaint(PaintEventArgs e)
     {
-        base.OnPaint(e);
-
-        if (_shadowSize <= 0) return;
-
-        // Content-Rechteck: dort liegen die Child-Controls
-        var content = new Rectangle(
+        Rectangle pageRect = new(
             Padding.Left,
             Padding.Top,
             ClientSize.Width - Padding.Horizontal,
-            ClientSize.Height - Padding.Vertical
-        );
+            ClientSize.Height - Padding.Vertical);
 
-        if (content.Width <= 0 || content.Height <= 0) return;
+        if (pageRect.Width <= 0 || pageRect.Height <= 0)
+            return;
 
-        // Schattenbasis = Content, um Offset verschoben (Drop-Shadow nach rechts/unten)
-        var shadowBase = content;
-        shadowBase.Offset(_shadowOffsetX, _shadowOffsetY);
+        e.Graphics.SmoothingMode = _cornerRadius > 0 ? SmoothingMode.AntiAlias : SmoothingMode.None;
+        e.Graphics.PixelOffsetMode = PixelOffsetMode.HighQuality;
 
-        // Für saubere 1px-Ringe
-        var oldSmoothing = e.Graphics.SmoothingMode;
-        e.Graphics.SmoothingMode = SmoothingMode.None;
+        DrawShadow(e.Graphics, pageRect);
 
-        // Schatten als konzentrische Rechtecke (1px pro Schritt)
-        // i=1..ShadowSize => außen heller, innen dunkler
-        for (int i = 1; i <= _shadowSize; i++)
+        using (GraphicsPath pagePath = CreatePath(pageRect))
+        using (SolidBrush pageBrush = new(_pageBackColor))
+        using (Pen borderPen = new(_pageBorderColor))
         {
-            float t = 1f - (i / (float)_shadowSize); // ~1..0
-            int a = (int)(_maxAlpha * t * t);
-
-            using var pen = new Pen(Color.FromArgb(a, 0, 0, 0), 1f);
-
-            var r = shadowBase;
-            r.Inflate(i, i);
-
-            // -1, damit das Rechteck sauber innerhalb der Pixelgrenzen liegt
-            r.Width -= 1;
-            r.Height -= 1;
-
-            e.Graphics.DrawRectangle(pen, r);
+            e.Graphics.FillPath(pageBrush, pagePath);
+            e.Graphics.DrawPath(borderPen, pagePath);
         }
 
-        e.Graphics.SmoothingMode = oldSmoothing;
+        base.OnPaint(e);
+    }
+
+    private void DrawShadow(Graphics graphics, Rectangle pageRect)
+    {
+        if (_shadowSize <= 0 || _maxAlpha <= 0)
+            return;
+
+        Rectangle rightShadow = new(
+            pageRect.Right + _shadowOffsetX - 1,
+            pageRect.Top + 2,
+            _shadowSize,
+            pageRect.Height + _shadowOffsetY - 2);
+
+        Rectangle bottomShadow = new(
+            pageRect.Left + 2,
+            pageRect.Bottom + _shadowOffsetY - 1,
+            pageRect.Width + _shadowOffsetX - 2,
+            _shadowSize);
+
+        Rectangle cornerShadow = new(
+            pageRect.Right + _shadowOffsetX - 1,
+            pageRect.Bottom + _shadowOffsetY - 1,
+            _shadowSize,
+            _shadowSize);
+
+        using (LinearGradientBrush rightBrush = new(
+            rightShadow,
+            Color.FromArgb(_maxAlpha, 128, 134, 145),
+            Color.FromArgb(0, 128, 134, 145),
+            LinearGradientMode.Horizontal))
+        {
+            graphics.FillRectangle(rightBrush, rightShadow);
+        }
+
+        using (LinearGradientBrush bottomBrush = new(
+            bottomShadow,
+            Color.FromArgb(_maxAlpha, 128, 134, 145),
+            Color.FromArgb(0, 128, 134, 145),
+            LinearGradientMode.Vertical))
+        {
+            graphics.FillRectangle(bottomBrush, bottomShadow);
+        }
+
+        using (GraphicsPath cornerPath = new())
+        {
+            cornerPath.AddRectangle(cornerShadow);
+            using PathGradientBrush cornerBrush = new(cornerPath)
+            {
+                CenterColor = Color.FromArgb(_maxAlpha, 128, 134, 145),
+                SurroundColors = new[] { Color.FromArgb(0, 128, 134, 145) }
+            };
+            graphics.FillRectangle(cornerBrush, cornerShadow);
+        }
+    }
+
+    private GraphicsPath CreatePath(Rectangle rect)
+    {
+        GraphicsPath path = new();
+
+        if (_cornerRadius <= 0)
+        {
+            path.AddRectangle(rect);
+            return path;
+        }
+
+        int diameter = _cornerRadius * 2;
+        Rectangle arc = new(rect.Location, new Size(diameter, diameter));
+
+        path.AddArc(arc, 180, 90);
+        arc.X = rect.Right - diameter;
+        path.AddArc(arc, 270, 90);
+        arc.Y = rect.Bottom - diameter;
+        path.AddArc(arc, 0, 90);
+        arc.X = rect.Left;
+        path.AddArc(arc, 90, 90);
+        path.CloseFigure();
+
+        return path;
     }
 }
