@@ -88,7 +88,7 @@ namespace HSTRYDoc
         }
 
         private static string DeriveSigningPrivateKeyPath(string ecdhPrivPath)
-            => Path.ChangeExtension(ecdhPrivPath, ".hstrysigpriv");
+            => KeyStorage.GetSigningPrivateKeyPath(ecdhPrivPath);
 
         private static string DeriveSigningPublicKeyPathFromEcdhPublic(string ecdhPubPath)
             => Path.ChangeExtension(ecdhPubPath, ".hstrysigpub");
@@ -268,7 +268,7 @@ namespace HSTRYDoc
             if (_container.Version != HSTRYContainer.CurrentVersion)
             {
                 MessageBox.Show(this,
-                    "This container is not V7.",
+                    $"This container is not V{HSTRYContainer.CurrentVersion}.",
                     "Recipients",
                     MessageBoxButtons.OK,
                     MessageBoxIcon.Warning);
@@ -378,22 +378,76 @@ namespace HSTRYDoc
         // ============================================================
         // Key file selection (lazy load)
         // ============================================================
-        private void UiBrowsePrivateKey()
+        private string CurrentDriveRoot
         {
-            using var ofd = new OpenFileDialog
+            get
             {
-                Filter = "HSTRY ECDH Private Key (*.hstrypriv)|*.hstrypriv|All files (*.*)|*.*",
-                CheckFileExists = true,
-                Title = "Select ECDH private key"
+                if (!string.IsNullOrWhiteSpace(SelectedEcdhPrivateKeyPath) &&
+                    KeyStorage.TryGetDriveRootAndFileNameFromKeyPath(SelectedEcdhPrivateKeyPath, out string driveRoot, out _))
+                    return driveRoot;
+
+                return string.Empty;
+            }
+        }
+
+        private string CurrentPrivateKeyFileName
+        {
+            get
+            {
+                if (!string.IsNullOrWhiteSpace(SelectedEcdhPrivateKeyPath) &&
+                    KeyStorage.TryGetDriveRootAndFileNameFromKeyPath(SelectedEcdhPrivateKeyPath, out _, out string fileName))
+                    return fileName;
+
+                return string.Empty;
+            }
+        }
+
+        private bool SelectPrivateKeyFromDrive(out string privateKeyPath)
+        {
+            privateKeyPath = string.Empty;
+            using KeySourceDialog dlg = new(CurrentDriveRoot, CurrentPrivateKeyFileName, requirePrivateKey: true)
+            {
+                StartPosition = FormStartPosition.CenterParent
             };
 
-            if (ofd.ShowDialog(this) != DialogResult.OK)
+            if (dlg.ShowDialog(this) != DialogResult.OK)
+                return false;
+
+            if (string.IsNullOrWhiteSpace(dlg.SelectedPrivateKeyPath) || !File.Exists(dlg.SelectedPrivateKeyPath))
+                return false;
+
+            privateKeyPath = dlg.SelectedPrivateKeyPath;
+            return true;
+        }
+
+        private bool SelectKeyDrive(out string driveRoot)
+        {
+            driveRoot = string.Empty;
+            using KeySourceDialog dlg = new(CurrentDriveRoot, CurrentPrivateKeyFileName, requirePrivateKey: false)
+            {
+                StartPosition = FormStartPosition.CenterParent
+            };
+
+            if (dlg.ShowDialog(this) != DialogResult.OK)
+                return false;
+
+            string selected = KeyStorage.NormalizeDriveRoot(dlg.SelectedDriveRoot ?? string.Empty);
+            if (string.IsNullOrWhiteSpace(selected))
+                return false;
+
+            driveRoot = selected;
+            return true;
+        }
+
+        private void UiBrowsePrivateKey()
+        {
+            if (!SelectPrivateKeyFromDrive(out string selectedPrivateKeyPath))
                 return;
 
-            if (!string.Equals(SelectedEcdhPrivateKeyPath ?? "", ofd.FileName, StringComparison.OrdinalIgnoreCase))
+            if (!string.Equals(SelectedEcdhPrivateKeyPath ?? "", selectedPrivateKeyPath, StringComparison.OrdinalIgnoreCase))
                 _sessionKeyPassword = null;
 
-            SelectedEcdhPrivateKeyPath = ofd.FileName;
+            SelectedEcdhPrivateKeyPath = selectedPrivateKeyPath;
 
             // Lazy: do not load immediately
             ClearLoadedKeys();
@@ -460,19 +514,11 @@ namespace HSTRYDoc
         // ============================================================
         private void UiCreateKeyPairForSharing()
         {
-            using var sfd = new SaveFileDialog
-            {
-                Filter = "HSTRY ECDH Private Key (*.hstrypriv)|*.hstrypriv|All files (*.*)|*.*",
-                DefaultExt = "hstrypriv",
-                AddExtension = true,
-                FileName = "recipient.hstrypriv",
-                Title = "Save new ECDH private key"
-            };
-
-            if (sfd.ShowDialog(this) != DialogResult.OK)
+            if (!SelectKeyDrive(out string driveRoot))
                 return;
 
-            string ecdhPrivPath = sfd.FileName;
+            string keyFolder = KeyStorage.GetKeyFolderForDrive(driveRoot);
+            string ecdhPrivPath = KeyStorage.GetPrivateKeyPath(driveRoot, "recipient.hstrypriv");
             string ecdhPubPath = Path.ChangeExtension(ecdhPrivPath, ".hstrypub");
             string signPrivPath = DeriveSigningPrivateKeyPath(ecdhPrivPath);
             string signPubPath = Path.ChangeExtension(signPrivPath, ".hstrysigpub");
@@ -497,6 +543,8 @@ namespace HSTRYDoc
 
             try
             {
+                Directory.CreateDirectory(keyFolder);
+
                 using var ecdh = HSTRYContainer.EcdhKeyFiles.CreateNewKeyPair();
                 using var ecdsa = HSTRYContainer.EcdsaKeyFiles.CreateNewKeyPair();
 
@@ -560,7 +608,7 @@ namespace HSTRYDoc
         {
             if (_container.Version != HSTRYContainer.CurrentVersion)
             {
-                MessageBox.Show(this, "This container is not V7.", "Transfer ownership",
+                MessageBox.Show(this, $"This container is not V{HSTRYContainer.CurrentVersion}.", "Transfer ownership",
                     MessageBoxButtons.OK, MessageBoxIcon.Warning);
                 return;
             }
@@ -579,19 +627,11 @@ namespace HSTRYDoc
             if (confirm != DialogResult.Yes)
                 return;
 
-            using var sfd = new SaveFileDialog
-            {
-                Filter = "HSTRY ECDH Private Key (*.hstrypriv)|*.hstrypriv|All files (*.*)|*.*",
-                DefaultExt = "hstrypriv",
-                AddExtension = true,
-                FileName = "new_owner.hstrypriv",
-                Title = "Save new owner ECDH private key"
-            };
-
-            if (sfd.ShowDialog(this) != DialogResult.OK)
+            if (!SelectKeyDrive(out string driveRoot))
                 return;
 
-            string newEcdhPrivPath = sfd.FileName;
+            string keyFolder = KeyStorage.GetKeyFolderForDrive(driveRoot);
+            string newEcdhPrivPath = KeyStorage.GetPrivateKeyPath(driveRoot, "new_owner.hstrypriv");
             string newEcdhPubPath = Path.ChangeExtension(newEcdhPrivPath, ".hstrypub");
             string newSignPrivPath = DeriveSigningPrivateKeyPath(newEcdhPrivPath);
             string newSignPubPath = Path.ChangeExtension(newSignPrivPath, ".hstrysigpub");
@@ -628,6 +668,8 @@ namespace HSTRYDoc
 
                         await Task.Run(() =>
                         {
+                            Directory.CreateDirectory(keyFolder);
+
                             using var newEcdh = HSTRYContainer.EcdhKeyFiles.CreateNewKeyPair();
                             using var newSig = HSTRYContainer.EcdsaKeyFiles.CreateNewKeyPair();
 
@@ -915,7 +957,7 @@ namespace HSTRYDoc
 
             if (!isV7)
             {
-                lblMyRecipientStatus.Text = "Key loaded. This container is not V7.";
+                lblMyRecipientStatus.Text = $"Key loaded. This container is not V{HSTRYContainer.CurrentVersion}.";
                 lblMyRecipientStatus.ForeColor = Color.DarkRed;
                 return;
             }
@@ -981,7 +1023,7 @@ namespace HSTRYDoc
 
                 if (_container.Version != HSTRYContainer.CurrentVersion)
                 {
-                    lblBlockAccessHint.Text = "Block access control requires V7.";
+                    lblBlockAccessHint.Text = $"Block access control requires V{HSTRYContainer.CurrentVersion}.";
                     return;
                 }
 
@@ -1032,12 +1074,12 @@ namespace HSTRYDoc
         {
             if (_container.Version != HSTRYContainer.CurrentVersion)
             {
-                MessageBox.Show(this, "Block access control requires V7.", "Block access",
+                MessageBox.Show(this, $"Block access control requires V{HSTRYContainer.CurrentVersion}.", "Block access",
                     MessageBoxButtons.OK, MessageBoxIcon.Warning);
                 return;
             }
 
-            if (!EnsureKeysLoadedForAction(requireOwner: true, requireSigningKey: false, showErrors: true))
+            if (!EnsureKeysLoadedForAction(requireOwner: true, requireSigningKey: true, showErrors: true))
                 return;
 
             var rec = GetSelectedRecipient();
@@ -1062,7 +1104,7 @@ namespace HSTRYDoc
                 using var recPub = ECDiffieHellman.Create();
                 recPub.ImportSubjectPublicKeyInfo(rec.PublicKeySpki, out _);
 
-                _container.GrantBlockAccess(_myEcdhPrivateKey!, idx, recPub, BlockRights.Read, replaceExisting: true);
+                _container.GrantBlockAccess(_mySigningPrivateKey!, _myEcdhPrivateKey!, idx, recPub, BlockRights.Read, replaceExisting: true);
 
                 ContainerChanged = true;
                 RefreshBlocksList();
@@ -1077,12 +1119,12 @@ namespace HSTRYDoc
         {
             if (_container.Version != HSTRYContainer.CurrentVersion)
             {
-                MessageBox.Show(this, "Block access control requires V7.", "Block access",
+                MessageBox.Show(this, $"Block access control requires V{HSTRYContainer.CurrentVersion}.", "Block access",
                     MessageBoxButtons.OK, MessageBoxIcon.Warning);
                 return;
             }
 
-            if (!EnsureKeysLoadedForAction(requireOwner: true, requireSigningKey: false, showErrors: true))
+            if (!EnsureKeysLoadedForAction(requireOwner: true, requireSigningKey: true, showErrors: true))
                 return;
 
             var rec = GetSelectedRecipient();
@@ -1100,7 +1142,7 @@ namespace HSTRYDoc
                     if (!_container.Blocks[idx].KeySlots.Any(s => s.KeyId.SequenceEqual(rec.KeyId)))
                         continue;
 
-                    _container.RevokeBlockAccess(_myEcdhPrivateKey!, idx, keyIdHex);
+                    _container.RevokeBlockAccess(_mySigningPrivateKey!, _myEcdhPrivateKey!, idx, keyIdHex);
                 }
 
                 ContainerChanged = true;
@@ -1116,12 +1158,12 @@ namespace HSTRYDoc
         {
             if (_container.Version != HSTRYContainer.CurrentVersion)
             {
-                MessageBox.Show(this, "Block access control requires V7.", "Block access",
+                MessageBox.Show(this, $"Block access control requires V{HSTRYContainer.CurrentVersion}.", "Block access",
                     MessageBoxButtons.OK, MessageBoxIcon.Warning);
                 return;
             }
 
-            if (!EnsureKeysLoadedForAction(requireOwner: true, requireSigningKey: false, showErrors: true))
+            if (!EnsureKeysLoadedForAction(requireOwner: true, requireSigningKey: true, showErrors: true))
                 return;
 
             if (_container.Blocks.Count == 0)
@@ -1163,7 +1205,7 @@ namespace HSTRYDoc
 
                         await Task.Run(() =>
                         {
-                            _container.GrantReadAllBlocks(_myEcdhPrivateKey!, recPub, progress, token);
+                            _container.GrantReadAllBlocks(_mySigningPrivateKey!, _myEcdhPrivateKey!, recPub, progress, token);
                         }, token);
                     });
 
@@ -1191,12 +1233,12 @@ namespace HSTRYDoc
         {
             if (_container.Version != HSTRYContainer.CurrentVersion)
             {
-                MessageBox.Show(this, "Block access control requires V7.", "Block access",
+                MessageBox.Show(this, $"Block access control requires V{HSTRYContainer.CurrentVersion}.", "Block access",
                     MessageBoxButtons.OK, MessageBoxIcon.Warning);
                 return;
             }
 
-            if (!EnsureKeysLoadedForAction(requireOwner: true, requireSigningKey: false, showErrors: true))
+            if (!EnsureKeysLoadedForAction(requireOwner: true, requireSigningKey: true, showErrors: true))
                 return;
 
             if (_container.Blocks.Count == 0)
@@ -1238,7 +1280,7 @@ namespace HSTRYDoc
 
                         await Task.Run(() =>
                         {
-                            _container.GrantWriteAllBlocks(_myEcdhPrivateKey!, recPub, progress, token);
+                            _container.GrantWriteAllBlocks(_mySigningPrivateKey!, _myEcdhPrivateKey!, recPub, progress, token);
                         }, token);
                     });
 
@@ -1266,12 +1308,12 @@ namespace HSTRYDoc
         {
             if (_container.Version != HSTRYContainer.CurrentVersion)
             {
-                MessageBox.Show(this, "Block access control requires V7.", "Block access",
+                MessageBox.Show(this, $"Block access control requires V{HSTRYContainer.CurrentVersion}.", "Block access",
                     MessageBoxButtons.OK, MessageBoxIcon.Warning);
                 return;
             }
 
-            if (!EnsureKeysLoadedForAction(requireOwner: true, requireSigningKey: false, showErrors: true))
+            if (!EnsureKeysLoadedForAction(requireOwner: true, requireSigningKey: true, showErrors: true))
                 return;
 
             if (_container.Blocks.Count == 0)
@@ -1303,7 +1345,7 @@ namespace HSTRYDoc
                     {
                         await Task.Run(() =>
                         {
-                            _container.RevokeAllBlocks(_myEcdhPrivateKey!, keyIdCopy, progress, token);
+                            _container.RevokeAllBlocks(_mySigningPrivateKey!, _myEcdhPrivateKey!, keyIdCopy, progress, token);
                         }, token);
                     });
 

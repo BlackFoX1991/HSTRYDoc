@@ -1,5 +1,4 @@
-﻿using System;
-using System.Collections.Generic;
+using System;
 using System.IO;
 using System.Linq;
 using System.Windows.Forms;
@@ -8,28 +7,25 @@ namespace HSTRYDoc
 {
     public partial class KeySourceDialog : Form
     {
-        private readonly string _defaultKeyPath;
+        private readonly string _initialDriveRoot;
+        private readonly string _initialPrivateKeyFileName;
+        private readonly bool _requirePrivateKey;
 
+        public string? SelectedDriveRoot { get; private set; }
+        public string? SelectedPrivateKeyFileName { get; private set; }
         public string? SelectedPrivateKeyPath { get; private set; }
 
-        public KeySourceDialog(string defaultKeyPath)
+        public KeySourceDialog(string initialDriveRoot, string? initialPrivateKeyFileName = null, bool requirePrivateKey = true)
         {
             InitializeComponent();
 
-            _defaultKeyPath = defaultKeyPath ?? string.Empty;
+            _initialDriveRoot = KeyStorage.NormalizeDriveRoot(initialDriveRoot);
+            _initialPrivateKeyFileName = Path.GetFileName(initialPrivateKeyFileName ?? string.Empty);
+            _requirePrivateKey = requirePrivateKey;
 
-            // Wire events
-            radioDefault.CheckedChanged += (_, __) => UpdateUi();
-            radioUsb.CheckedChanged += (_, __) => UpdateUi();
-            radioManual.CheckedChanged += (_, __) => UpdateUi();
-
-            lstUsbKeys.SelectedIndexChanged += (_, __) => UpdateUi();
-
-            btnRescan.Click += (_, __) => ScanUsbKeys();
-            btnBrowse.Click += (_, __) => BrowseManualKey();
-
-            txtManualPath.TextChanged += (_, __) => UpdateUi();
-
+            lstDrives.SelectedIndexChanged += (_, __) => RefreshKeysForSelectedDrive();
+            lstKeys.SelectedIndexChanged += (_, __) => UpdateUi();
+            btnRescan.Click += (_, __) => ScanDrives();
             btnOk.Click += (_, __) => OnOk();
             btnCancel.Click += (_, __) => DialogResult = DialogResult.Cancel;
 
@@ -39,146 +35,140 @@ namespace HSTRYDoc
 
         private void KeySourceDialog_Load(object? sender, EventArgs e)
         {
-            lblDefaultPath.Text = _defaultKeyPath;
+            lblIntro.Text = _requirePrivateKey
+                ? "Choose a drive and then select a private key from its HSTRY_KEY folder."
+                : "Choose the drive where the HSTRY_KEY folder should be used.";
 
-            ScanUsbKeys();
-
-            // Default to "Default" if available; otherwise USB if available; else Manual
-            if (File.Exists(_defaultKeyPath))
-            {
-                radioDefault.Checked = true;
-            }
-            else if (lstUsbKeys.Items.Count > 0)
-            {
-                radioUsb.Checked = true;
-                lstUsbKeys.SelectedIndex = 0;
-            }
-            else
-            {
-                radioManual.Checked = true;
-            }
-
-            UpdateUi();
+            ScanDrives();
         }
 
-        private void ScanUsbKeys()
+        private void ScanDrives()
         {
-            lstUsbKeys.BeginUpdate();
+            string? previous = SelectedDriveRoot;
+
+            lstDrives.BeginUpdate();
             try
             {
-                lstUsbKeys.Items.Clear();
-
-                foreach (var p in FindUsbPrivateKeys())
-                    lstUsbKeys.Items.Add(p);
-
-                if (lstUsbKeys.Items.Count > 0)
-                    lstUsbKeys.SelectedIndex = 0;
+                lstDrives.Items.Clear();
+                foreach (string root in KeyStorage.FindAvailableDriveRoots())
+                    lstDrives.Items.Add(root);
             }
             finally
             {
-                lstUsbKeys.EndUpdate();
+                lstDrives.EndUpdate();
             }
 
+            SelectDrive(previous);
+            RefreshKeysForSelectedDrive();
+        }
+
+        private void SelectDrive(string? preferredRoot)
+        {
+            string preferred = KeyStorage.NormalizeDriveRoot(preferredRoot ?? _initialDriveRoot);
+            if (!string.IsNullOrWhiteSpace(preferred))
+            {
+                for (int i = 0; i < lstDrives.Items.Count; i++)
+                {
+                    if (string.Equals(lstDrives.Items[i] as string, preferred, StringComparison.OrdinalIgnoreCase))
+                    {
+                        lstDrives.SelectedIndex = i;
+                        return;
+                    }
+                }
+            }
+
+            if (lstDrives.Items.Count > 0)
+                lstDrives.SelectedIndex = 0;
+        }
+
+        private void RefreshKeysForSelectedDrive()
+        {
+            SelectedDriveRoot = lstDrives.SelectedItem as string;
+            string[] keys = string.IsNullOrWhiteSpace(SelectedDriveRoot)
+                ? Array.Empty<string>()
+                : KeyStorage.FindPrivateKeysInKeyFolder(SelectedDriveRoot);
+
+            lstKeys.BeginUpdate();
+            try
+            {
+                lstKeys.Items.Clear();
+                foreach (string fileName in KeyStorage.GetPrivateKeyFileNames(keys))
+                    lstKeys.Items.Add(fileName);
+            }
+            finally
+            {
+                lstKeys.EndUpdate();
+            }
+
+            SelectKey();
             UpdateUi();
         }
 
-        private static List<string> FindUsbPrivateKeys()
+        private void SelectKey()
         {
-            var result = new List<string>();
-
-            DriveInfo[] drives;
-            try { drives = DriveInfo.GetDrives(); }
-            catch { return result; }
-
-            foreach (var d in drives)
-            {
-                // You asked "optional USB/HSTRY_KEY" – include only removable by default.
-                if (d.DriveType != DriveType.Removable) continue;
-                if (!d.IsReady) continue;
-
-                string dir = Path.Combine(d.RootDirectory.FullName, "HSTRY_KEY");
-                if (!Directory.Exists(dir)) continue;
-
-                try
-                {
-                    // Encrypted private keys are still *.hstrypriv
-                    result.AddRange(Directory.GetFiles(dir, "*.hstrypriv", SearchOption.TopDirectoryOnly));
-                }
-                catch
-                {
-                    // ignore unreadable USB drives/folders
-                }
-            }
-
-            return result
-                .Distinct(StringComparer.OrdinalIgnoreCase)
-                .OrderBy(p => p, StringComparer.OrdinalIgnoreCase)
-                .ToList();
-        }
-
-        private void BrowseManualKey()
-        {
-            using var ofd = new OpenFileDialog
-            {
-                Filter = "HSTRY Private Key (*.hstrypriv)|*.hstrypriv|All files (*.*)|*.*",
-                CheckFileExists = true,
-                Title = "Select private key"
-            };
-
-            if (ofd.ShowDialog(this) != DialogResult.OK)
+            if (lstKeys.Items.Count == 0)
                 return;
 
-            txtManualPath.Text = ofd.FileName;
-            radioManual.Checked = true;
-            UpdateUi();
+            if (!string.IsNullOrWhiteSpace(_initialPrivateKeyFileName))
+            {
+                for (int i = 0; i < lstKeys.Items.Count; i++)
+                {
+                    if (string.Equals(lstKeys.Items[i] as string, _initialPrivateKeyFileName, StringComparison.OrdinalIgnoreCase))
+                    {
+                        lstKeys.SelectedIndex = i;
+                        return;
+                    }
+                }
+            }
+
+            lstKeys.SelectedIndex = 0;
         }
 
         private void UpdateUi()
         {
-            bool defExists = !string.IsNullOrWhiteSpace(_defaultKeyPath) && File.Exists(_defaultKeyPath);
-            lblDefaultStatus.Text = defExists ? "Status: Found" : "Status: Not found";
+            SelectedDriveRoot = lstDrives.SelectedItem as string;
+            SelectedPrivateKeyFileName = lstKeys.SelectedItem as string;
 
-            bool usbHasItems = lstUsbKeys.Items.Count > 0;
-            lblUsbStatus.Text = usbHasItems ? $"Status: {lstUsbKeys.Items.Count} key(s) found" : "Status: No keys found";
+            string folder = string.IsNullOrWhiteSpace(SelectedDriveRoot)
+                ? string.Empty
+                : KeyStorage.GetKeyFolderForDrive(SelectedDriveRoot);
 
-            pnlUsb.Enabled = radioUsb.Checked;
-            pnlManual.Enabled = radioManual.Checked;
+            lblKeyFolder.Text = string.IsNullOrWhiteSpace(folder) ? "<no drive selected>" : folder;
 
-            string? selected = null;
+            SelectedPrivateKeyPath = (!string.IsNullOrWhiteSpace(SelectedDriveRoot) &&
+                                      !string.IsNullOrWhiteSpace(SelectedPrivateKeyFileName))
+                ? KeyStorage.GetPrivateKeyPath(SelectedDriveRoot, SelectedPrivateKeyFileName)
+                : null;
 
-            if (radioDefault.Checked)
-            {
-                selected = defExists ? _defaultKeyPath : null;
-            }
-            else if (radioUsb.Checked)
-            {
-                selected = lstUsbKeys.SelectedItem as string;
-                if (string.IsNullOrWhiteSpace(selected) || !File.Exists(selected))
-                    selected = null;
-            }
-            else if (radioManual.Checked)
-            {
-                string p = (txtManualPath.Text ?? string.Empty).Trim();
-                selected = (!string.IsNullOrWhiteSpace(p) && File.Exists(p)) ? p : null;
-            }
+            bool hasDrive = !string.IsNullOrWhiteSpace(SelectedDriveRoot);
+            bool hasKey = !string.IsNullOrWhiteSpace(SelectedPrivateKeyPath) && File.Exists(SelectedPrivateKeyPath);
+            btnOk.Enabled = hasDrive && (!_requirePrivateKey || hasKey);
 
-            SelectedPrivateKeyPath = selected;
-
-            btnOk.Enabled = SelectedPrivateKeyPath != null;
-
-            if (radioDefault.Checked && !defExists)
-                lblHint.Text = "The default key is missing. Choose USB or Manual.";
-            else if (radioUsb.Checked && !usbHasItems)
-                lblHint.Text = "No keys found on USB. Insert a USB drive with folder HSTRY_KEY and click Rescan.";
-            else if (radioManual.Checked && SelectedPrivateKeyPath == null)
-                lblHint.Text = "Select a .hstrypriv file.";
+            if (!hasDrive)
+                lblHint.Text = "No ready drive is available.";
+            else if (_requirePrivateKey && lstKeys.Items.Count == 0)
+                lblHint.Text = "No .hstrypriv key was found in this drive's HSTRY_KEY folder.";
+            else if (_requirePrivateKey && !hasKey)
+                lblHint.Text = "Select a private key.";
+            else if (!_requirePrivateKey && !Directory.Exists(folder))
+                lblHint.Text = "The HSTRY_KEY folder will be created when needed.";
             else
                 lblHint.Text = "Click OK to continue.";
         }
 
         private void OnOk()
         {
-            if (SelectedPrivateKeyPath == null)
+            UpdateUi();
+
+            if (string.IsNullOrWhiteSpace(SelectedDriveRoot))
+            {
+                MessageBox.Show(this, "No drive was selected.", "Private key",
+                    MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
+
+            if (_requirePrivateKey &&
+                (string.IsNullOrWhiteSpace(SelectedPrivateKeyPath) || !File.Exists(SelectedPrivateKeyPath)))
             {
                 MessageBox.Show(this, "No valid private key was selected.", "Private key",
                     MessageBoxButtons.OK, MessageBoxIcon.Warning);

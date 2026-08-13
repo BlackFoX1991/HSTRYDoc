@@ -12,20 +12,6 @@ namespace HSTRYDoc
 
         private string? _sessionKeyPassword;
 
-
-        private enum KeyResolveOutcome
-        {
-            Success,     // session key chosen
-            Fallback     // do not use drive keys, use stored path / setup
-        }
-
-        private sealed class DriveKeyCandidate
-        {
-            public string DriveRoot { get; init; } = string.Empty;   // "E:\\"
-            public string FolderPath { get; init; } = string.Empty;  // "E:\\HSTRY_KEY"
-            public string[] PrivateKeys { get; init; } = Array.Empty<string>();
-        }
-
         private HSTRYDoc.colorPicker? _colorPopup;
         private bool _suppressBlockSelectionChanged = false;
 
@@ -47,7 +33,7 @@ namespace HSTRYDoc
         private string? _ecdhPrivateKeyPath;
 
         private static string DeriveSigningPrivateKeyPath(string ecdhPrivPath)
-    => Path.ChangeExtension(ecdhPrivPath, ".hstrysigpriv");
+    => KeyStorage.GetSigningPrivateKeyPath(ecdhPrivPath);
 
 
 
@@ -279,12 +265,11 @@ namespace HSTRYDoc
                 return;
 
             _ecdhPrivateKeyPath = dlg.SelectedEcdhPrivateKeyPath;
-
-            // Persist into AppState (ECDH key only)
-            if (!string.IsNullOrWhiteSpace(_ecdhPrivateKeyPath) && File.Exists(_ecdhPrivateKeyPath))
+            if (!string.IsNullOrWhiteSpace(_ecdhPrivateKeyPath) &&
+                File.Exists(_ecdhPrivateKeyPath) &&
+                KeyStorage.IsKeyPathInManagedFolder(_ecdhPrivateKeyPath))
             {
-                _appState.PrivateKeyPath = _ecdhPrivateKeyPath;
-                _appState.Save();
+                StoreSelectedPrivateKey(_ecdhPrivateKeyPath);
             }
 
             // If container changed in dialog -> save now
@@ -452,6 +437,7 @@ namespace HSTRYDoc
             try
             {
                 CancelHashWorkers();
+                using var ownerSig = LoadSigningKeyForCurrentSession();
 
                 await reporterDiag.RunAsync(
                     owner: this,
@@ -480,7 +466,7 @@ namespace HSTRYDoc
                                 string plain = BuildRandomParagraphs(words, wCount);
                                 string rtf = BuildSimpleRtf(title, plain);
 
-                                _container!.AddRtfDocument(title, rtf);
+                                _container!.AddRtfDocument(ownerSig, title, rtf);
 
                                 progress.Report(new UiProgress
                                 {
@@ -638,13 +624,6 @@ namespace HSTRYDoc
             WireUiEvents();
             InitAutoComplete();
 
-            // Sync menu checkbox with AppState (no dialogs here)
-            if (keyLookupExternalDriveToolStripMenuItem != null)
-                keyLookupExternalDriveToolStripMenuItem.Checked = _appState.UseDriveKeySearch;
-
-            // IMPORTANT: Do NOT ask for drive scan / key config on startup anymore.
-            // Key resolution happens only when opening a container or creating a new container.
-
             if (!await TryOpenFromCommandLineOrShellAsync())
             {
                 if (!await RunChooserStartupAsync())
@@ -659,191 +638,23 @@ namespace HSTRYDoc
             RebuildAutoCompleteWordsFromEditor();
         }
 
-        private static List<DriveKeyCandidate> FindDriveKeyCandidates()
-        {
-            var result = new List<DriveKeyCandidate>();
-
-            DriveInfo[] drives;
-            try { drives = DriveInfo.GetDrives(); }
-            catch { return result; }
-
-            // Prefer removable first, then fixed
-            var ordered = drives
-                .Where(d => d.DriveType == DriveType.Removable || d.DriveType == DriveType.Fixed)
-                .OrderBy(d => d.DriveType == DriveType.Removable ? 0 : 1)
-                .ToList();
-
-            foreach (var d in ordered)
-            {
-                try
-                {
-                    if (!d.IsReady) continue;
-
-                    string root = d.RootDirectory.FullName;                 // "E:\\"
-                    string folder = Path.Combine(root, "HSTRY_KEY");         // "E:\\HSTRY_KEY"
-
-                    if (!Directory.Exists(folder))
-                        continue;
-
-                    string[] privs = Directory.GetFiles(folder, "*.hstrypriv", SearchOption.TopDirectoryOnly);
-                    if (privs.Length == 0)
-                        continue;
-
-                    result.Add(new DriveKeyCandidate
-                    {
-                        DriveRoot = root,
-                        FolderPath = folder,
-                        PrivateKeys = privs
-                    });
-                }
-                catch
-                {
-                    // ignore drive errors
-                }
-            }
-
-            return result;
-        }
-
-        private static string SelectPreferredPrivateKey(string folderPath, string[] privKeys)
-        {
-            if (privKeys == null || privKeys.Length == 0)
-                return string.Empty;
-
-            // Prefer default_owner.hstrypriv then owner.hstrypriv
-            string p1 = Path.Combine(folderPath, "default_owner.hstrypriv");
-            if (File.Exists(p1))
-                return p1;
-
-            string p2 = Path.Combine(folderPath, "owner.hstrypriv");
-            if (File.Exists(p2))
-                return p2;
-
-            // Otherwise: stable choice (first ordered by filename)
-            return privKeys
-                .OrderBy(p => Path.GetFileName(p), StringComparer.OrdinalIgnoreCase)
-                .First();
-        }
-
-        private KeyResolveOutcome TryResolvePrivateKeyFromDrivesInteractive(out string? sessionPrivateKeyPath)
-        {
-            sessionPrivateKeyPath = null;
-
-            // Ask every start (only when UseDriveKeySearch is enabled)
-            var ask = MessageBox.Show(
-                this,
-                "Search connected drives for a folder named 'HSTRY_KEY' now?",
-                "Drive key search",
-                MessageBoxButtons.YesNo,
-                MessageBoxIcon.Question);
-
-            if (ask != DialogResult.Yes)
-                return KeyResolveOutcome.Fallback;
-
-            var candidates = FindDriveKeyCandidates();
-            if (candidates.Count == 0)
-            {
-                MessageBox.Show(
-                    this,
-                    "No 'HSTRY_KEY' folder with private keys (*.hstrypriv) was found on connected drives.",
-                    "Drive key search",
-                    MessageBoxButtons.OK,
-                    MessageBoxIcon.Information);
-
-                return KeyResolveOutcome.Fallback;
-            }
-
-            foreach (var c in candidates)
-            {
-                // Preselect best key
-                string preferred = SelectPreferredPrivateKey(c.FolderPath, c.PrivateKeys);
-                string preferredName = string.IsNullOrWhiteSpace(preferred) ? "<none>" : Path.GetFileName(preferred);
-
-                var use = MessageBox.Show(
-                    this,
-                    $"Found key folder:\n{c.FolderPath}\n\n" +
-                    $"Preferred key: {preferredName}\n\n" +
-                    $"Use keys from drive '{c.DriveRoot}' for this session?",
-                    "Drive key found",
-                    MessageBoxButtons.YesNo,
-                    MessageBoxIcon.Question);
-
-                if (use != DialogResult.Yes)
-                    continue;
-
-                // If only one or preferred exists -> take preferred
-                if (!string.IsNullOrWhiteSpace(preferred) && File.Exists(preferred))
-                {
-                    sessionPrivateKeyPath = preferred;
-                    return KeyResolveOutcome.Success;
-                }
-
-                // Fallback: ask user to pick one in folder
-                using var ofd = new OpenFileDialog
-                {
-                    InitialDirectory = c.FolderPath,
-                    Filter = "HSTRY Private Key (*.hstrypriv)|*.hstrypriv|All files (*.*)|*.*",
-                    CheckFileExists = true,
-                    Title = $"Select private key from {c.DriveRoot}"
-                };
-
-                if (ofd.ShowDialog(this) != DialogResult.OK)
-                    continue;
-
-                if (!File.Exists(ofd.FileName))
-                    continue;
-
-                sessionPrivateKeyPath = ofd.FileName;
-                return KeyResolveOutcome.Success;
-            }
-
-            // user declined all drives
-            return KeyResolveOutcome.Fallback;
-        }
-
-
-
         // ============================================================
-        // Interactive key selection dialog (Default vs USB(HSTRY_KEY) vs Manual)
+        // Interactive key selection dialog (drive root + HSTRY_KEY)
         // ============================================================
         private bool ResolvePrivateKeyInteractive(string containerPath, out string ecdhPrivateKeyPath)
         {
             ecdhPrivateKeyPath = string.Empty;
 
-            string? old = _ecdhPrivateKeyPath;
-
-            // 1) Optional drive scan
-            if (_appState.UseDriveKeySearch)
+            if (TryGetConfiguredPrivateKeyPath(out ecdhPrivateKeyPath))
             {
-                var outcome = TryResolvePrivateKeyFromDrivesInteractive(out string? sessionKey);
+                if (!string.Equals(_ecdhPrivateKeyPath ?? string.Empty, ecdhPrivateKeyPath, StringComparison.OrdinalIgnoreCase))
+                    _sessionKeyPassword = null;
 
-                if (outcome == KeyResolveOutcome.Success &&
-                    !string.IsNullOrWhiteSpace(sessionKey) &&
-                    File.Exists(sessionKey))
-                {
-                    _ecdhPrivateKeyPath = sessionKey; // session-only
-                    ecdhPrivateKeyPath = sessionKey;
-
-                    if (!string.Equals(old, _ecdhPrivateKeyPath, StringComparison.OrdinalIgnoreCase))
-                        _sessionKeyPassword = null; // password likely differs
-
-                    return true;
-                }
+                _ecdhPrivateKeyPath = ecdhPrivateKeyPath;
+                return true;
             }
 
-            // 2) Fallback: stored path / create-select flow
-            if (!EnsurePrivateKeyConfiguredInteractive())
-                return false;
-
-            if (string.IsNullOrWhiteSpace(_ecdhPrivateKeyPath) || !File.Exists(_ecdhPrivateKeyPath))
-                return false;
-
-            ecdhPrivateKeyPath = _ecdhPrivateKeyPath!;
-
-            if (!string.Equals(old, _ecdhPrivateKeyPath, StringComparison.OrdinalIgnoreCase))
-                _sessionKeyPassword = null;
-
-            return true;
+            return SelectPrivateKeyFromDrive(out ecdhPrivateKeyPath);
         }
 
 
@@ -1040,6 +851,12 @@ namespace HSTRYDoc
                 if (dr == DialogResult.Cancel)
                     return false;
 
+                if (dr == DialogResult.Retry)
+                {
+                    ConfigureKeyOptionsFromChooser();
+                    continue;
+                }
+
                 if (dr == DialogResult.Yes)
                 {
                     if (await UiCreateNewContainerAsync(initialStartup: true))
@@ -1081,6 +898,92 @@ namespace HSTRYDoc
                 return false;
             }
 
+            return true;
+        }
+
+        private void ConfigureKeyOptionsFromChooser()
+        {
+            SelectExistingEcdhPrivateKeyAndStore();
+        }
+
+        private bool TryGetConfiguredPrivateKeyPath(out string ecdhPrivateKeyPath)
+        {
+            ecdhPrivateKeyPath = string.Empty;
+
+            string driveRoot = KeyStorage.NormalizeDriveRoot(_appState.PrivateKeyDriveRoot ?? string.Empty);
+            string fileName = Path.GetFileName(_appState.PrivateKeyFileName ?? string.Empty);
+            if (string.IsNullOrWhiteSpace(driveRoot) || string.IsNullOrWhiteSpace(fileName))
+                return false;
+            if (!KeyStorage.IsAvailableDriveRoot(driveRoot))
+                return false;
+
+            string path = KeyStorage.GetPrivateKeyPath(driveRoot, fileName);
+            if (!File.Exists(path))
+                return false;
+
+            ecdhPrivateKeyPath = path;
+            return true;
+        }
+
+        private void StoreSelectedPrivateKey(string ecdhPrivateKeyPath)
+        {
+            if (!KeyStorage.TryGetDriveRootAndFileNameFromKeyPath(ecdhPrivateKeyPath, out string driveRoot, out string fileName))
+                throw new InvalidOperationException("Private keys must be stored in the HSTRY_KEY folder at the root of a drive.");
+            if (!KeyStorage.IsAvailableDriveRoot(driveRoot))
+                throw new InvalidOperationException("Private keys must be stored on a ready drive.");
+
+            if (!string.Equals(_ecdhPrivateKeyPath ?? string.Empty, ecdhPrivateKeyPath, StringComparison.OrdinalIgnoreCase))
+                _sessionKeyPassword = null;
+
+            _ecdhPrivateKeyPath = ecdhPrivateKeyPath;
+            _appState.PrivateKeyDriveRoot = driveRoot;
+            _appState.PrivateKeyFileName = fileName;
+            _appState.Save();
+        }
+
+        private bool SelectPrivateKeyFromDrive(out string ecdhPrivateKeyPath)
+        {
+            ecdhPrivateKeyPath = string.Empty;
+
+            using KeySourceDialog dlg = new(
+                _appState.PrivateKeyDriveRoot ?? string.Empty,
+                _appState.PrivateKeyFileName,
+                requirePrivateKey: true)
+            {
+                StartPosition = FormStartPosition.CenterParent
+            };
+
+            if (dlg.ShowDialog(this) != DialogResult.OK)
+                return false;
+
+            if (string.IsNullOrWhiteSpace(dlg.SelectedPrivateKeyPath) || !File.Exists(dlg.SelectedPrivateKeyPath))
+                return false;
+
+            StoreSelectedPrivateKey(dlg.SelectedPrivateKeyPath);
+            ecdhPrivateKeyPath = dlg.SelectedPrivateKeyPath;
+            return true;
+        }
+
+        private bool SelectKeyDrive(out string driveRoot)
+        {
+            driveRoot = string.Empty;
+
+            using KeySourceDialog dlg = new(
+                _appState.PrivateKeyDriveRoot ?? string.Empty,
+                _appState.PrivateKeyFileName,
+                requirePrivateKey: false)
+            {
+                StartPosition = FormStartPosition.CenterParent
+            };
+
+            if (dlg.ShowDialog(this) != DialogResult.OK)
+                return false;
+
+            string selected = KeyStorage.NormalizeDriveRoot(dlg.SelectedDriveRoot ?? string.Empty);
+            if (string.IsNullOrWhiteSpace(selected))
+                return false;
+
+            driveRoot = selected;
             return true;
         }
 
@@ -1188,7 +1091,7 @@ namespace HSTRYDoc
             catch (InvalidDataException ex) when (ex.Message.Contains("Unsupported container version", StringComparison.OrdinalIgnoreCase))
             {
                 MessageBox.Show(this,
-                    "This file was created with a different container version.\n\nThis build supports V6 only.",
+                    $"This file was created with a different container version.\n\nThis build supports V{HSTRYContainer.CurrentVersion} only.",
                     "Open container",
                     MessageBoxButtons.OK,
                     MessageBoxIcon.Warning);
@@ -1305,11 +1208,7 @@ namespace HSTRYDoc
             // Closing
             FormClosing += hsMain_FormClosing;
 
-            keyLookupExternalDriveToolStripMenuItem.CheckedChanged += (_, __) =>
-            {
-                _appState.UseDriveKeySearch = keyLookupExternalDriveToolStripMenuItem.Checked;
-                _appState.Save();
-            };
+            keyLookupExternalDriveToolStripMenuItem.Click += (_, __) => SelectExistingEcdhPrivateKeyAndStore();
 
         }
 
@@ -1737,8 +1636,9 @@ namespace HSTRYDoc
             {
                 // Stop hashing before mutation + list rebuild
                 CancelHashWorkers();
+                using var ownerSig = LoadSigningKeyForCurrentSession();
 
-                Block b = _container.AddRtfDocument(title, emptyRtf);
+                Block b = _container.AddRtfDocument(ownerSig, title, emptyRtf);
                 _containerDirty = true;
 
                 RefreshBlockList(selectIndex: b.Index);
@@ -1769,8 +1669,9 @@ namespace HSTRYDoc
             {
                 // Stop hashing before mutation + list rebuild
                 CancelHashWorkers();
+                using var ownerSig = LoadSigningKeyForCurrentSession();
 
-                _container.RenameBlock(idx, dlg.InputText);
+                _container.RenameBlock(ownerSig, idx, dlg.InputText);
                 _containerDirty = true;
 
                 RefreshBlockList(selectIndex: idx);
@@ -1811,8 +1712,9 @@ namespace HSTRYDoc
             {
                 // Stop hashing before removal (indices shift) + list rebuild
                 CancelHashWorkers();
+                using var ownerSig = LoadSigningKeyForCurrentSession();
 
-                _container.RemoveBlock(idx);
+                _container.RemoveBlock(ownerSig, idx);
                 _containerDirty = true;
 
                 int newIndex = -1;
@@ -1953,8 +1855,9 @@ namespace HSTRYDoc
             {
                 // Stop hashing before heavy update/re-encrypt and list rebuild
                 CancelHashWorkers();
+                using var ownerSig = LoadSigningKeyForCurrentSession();
 
-                _container.UpdateRtfDocument(_currentBlockIndex, rtfMainText.Rtf ?? string.Empty);
+                _container.UpdateRtfDocument(ownerSig, _currentBlockIndex, rtfMainText.Rtf ?? string.Empty);
                 _blockDirty = false;
                 _containerDirty = true;
 
@@ -1995,8 +1898,9 @@ namespace HSTRYDoc
             {
                 // Stop hashing before heavy update/re-encrypt and list rebuild
                 CancelHashWorkers();
+                using var ownerSig = LoadSigningKeyForCurrentSession();
 
-                _container.UpdateRtfDocument(_currentBlockIndex, rtfMainText.Rtf ?? string.Empty);
+                _container.UpdateRtfDocument(ownerSig, _currentBlockIndex, rtfMainText.Rtf ?? string.Empty);
                 _blockDirty = false;
                 _containerDirty = true;
 
@@ -3752,18 +3656,17 @@ namespace HSTRYDoc
 
         private bool EnsurePrivateKeyConfiguredInteractive()
         {
-            // Stored path in AppState = ECDH private key
-            if (!string.IsNullOrWhiteSpace(_appState.PrivateKeyPath) && File.Exists(_appState.PrivateKeyPath))
+            if (TryGetConfiguredPrivateKeyPath(out string configuredPath))
             {
-                _ecdhPrivateKeyPath = _appState.PrivateKeyPath;
+                _ecdhPrivateKeyPath = configuredPath;
                 return true;
             }
 
             var res = MessageBox.Show(
                 this,
                 "No private key is configured.\n\n" +
-                "Yes: Create a new key set (ECDH + ECDSA)\n" +
-                "No:  Select an existing ECDH private key\n" +
+                "Yes: Create a new key set on a drive\n" +
+                "No:  Select an existing key from a drive\n" +
                 "Cancel: Exit",
                 "Private key setup",
                 MessageBoxButtons.YesNoCancel,
@@ -3780,21 +3683,11 @@ namespace HSTRYDoc
 
         private bool CreateNewKeySetInteractiveAndStore()
         {
-            using var sfd = new SaveFileDialog
-            {
-                Filter = "HSTRY ECDH Private Key (*.hstrypriv)|*.hstrypriv|All files (*.*)|*.*",
-                DefaultExt = "hstrypriv",
-                AddExtension = true,
-                FileName = "owner.hstrypriv",
-                Title = "Save new ECDH private key"
-            };
-
-            if (sfd.ShowDialog(this) != DialogResult.OK)
+            if (!SelectKeyDrive(out string driveRoot))
                 return false;
 
-            string ecdhPrivPath = sfd.FileName;
-            if (string.IsNullOrWhiteSpace(ecdhPrivPath))
-                return false;
+            string keyFolder = KeyStorage.GetKeyFolderForDrive(driveRoot);
+            string ecdhPrivPath = KeyStorage.GetPrivateKeyPath(driveRoot, KeyStorage.DefaultOwnerPrivateKeyFileName);
 
             string ecdhPubPath = Path.ChangeExtension(ecdhPrivPath, ".hstrypub");
             string signPrivPath = DeriveSigningPrivateKeyPath(ecdhPrivPath);
@@ -3820,6 +3713,8 @@ namespace HSTRYDoc
 
             try
             {
+                Directory.CreateDirectory(keyFolder);
+
                 using var ecdh = HSTRYContainer.EcdhKeyFiles.CreateNewKeyPair();
                 using var ecdsa = HSTRYContainer.EcdsaKeyFiles.CreateNewKeyPair();
 
@@ -3833,8 +3728,7 @@ namespace HSTRYDoc
 
                 _ecdhPrivateKeyPath = ecdhPrivPath;
 
-                _appState.PrivateKeyPath = ecdhPrivPath;
-                _appState.Save();
+                StoreSelectedPrivateKey(ecdhPrivPath);
 
                 MessageBox.Show(
                     this,
@@ -3859,28 +3753,7 @@ namespace HSTRYDoc
 
         private bool SelectExistingEcdhPrivateKeyAndStore()
         {
-            using var ofd = new OpenFileDialog
-            {
-                Filter = "HSTRY ECDH Private Key (*.hstrypriv)|*.hstrypriv|All files (*.*)|*.*",
-                CheckFileExists = true,
-                Title = "Select ECDH private key"
-            };
-
-            if (ofd.ShowDialog(this) != DialogResult.OK)
-                return false;
-
-            string chosen = ofd.FileName;
-            if (string.IsNullOrWhiteSpace(chosen) || !File.Exists(chosen))
-                return false;
-
-            if (!string.Equals(_ecdhPrivateKeyPath ?? "", chosen, StringComparison.OrdinalIgnoreCase))
-                _sessionKeyPassword = null; // password likely differs
-
-            _ecdhPrivateKeyPath = chosen;
-            _appState.PrivateKeyPath = chosen;
-            _appState.Save();
-
-            return true;
+            return SelectPrivateKeyFromDrive(out _);
         }
 
         private void UpdateWindowTitle()
@@ -4210,6 +4083,17 @@ namespace HSTRYDoc
                 throw new FileNotFoundException("Owner signing key is missing.", signPath);
 
             return HSTRYContainer.EcdsaKeyFiles.LoadPrivateKeyPkcs8Encrypted(signPath, password);
+        }
+
+        private ECDsa LoadSigningKeyForCurrentSession()
+        {
+            if (string.IsNullOrWhiteSpace(_ecdhPrivateKeyPath))
+                throw new InvalidOperationException("No ECDH private key is configured.");
+
+            if (!EnsureSessionPasswordPrompt(out string password))
+                throw new OperationCanceledException();
+
+            return LoadEcdsaSigningKeyWithPassword(_ecdhPrivateKeyPath!, password);
         }
 
 

@@ -6,7 +6,7 @@ namespace HSTRYDoc
     public static class Global
     {
         public static readonly string AppName = "HstryDocu";
-        public static readonly string AppVersion = "7.5.3";
+        public static readonly string AppVersion = "8.0.0";
 
         /// <summary>
         /// Default encoding for RTF string <-> bytes.

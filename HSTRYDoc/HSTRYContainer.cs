@@ -33,7 +33,7 @@ namespace HSTRYDoc
         // =========================
         // V7 constants
         // =========================
-        public const byte CurrentVersion = 7;
+        public const byte CurrentVersion = 8;
         private const byte V7 = 7;
 
         // Recipient algs (V7)
@@ -65,6 +65,7 @@ namespace HSTRYDoc
 
         // Stable container binding
         public byte[] ContainerId { get; private set; } = Array.Empty<byte>(); // 32 bytes
+        public byte[] BlockManifestHash { get; private set; } = Array.Empty<byte>(); // signed hash over block count + chain tip
 
         // Owner identity for access control = SHA256(OwnerEcdhPublicKeySpki)
         public byte[] OwnerKeyId => (OwnerEcdhPublicKeySpki.Length == 0) ? Array.Empty<byte>() : SHA256.HashData(OwnerEcdhPublicKeySpki);
@@ -304,6 +305,8 @@ namespace HSTRYDoc
                 .Distinct(StringComparer.OrdinalIgnoreCase).Count() != c._recipients.Count)
                 throw new InvalidOperationException("Duplicate recipient keys detected (KeyId collision).");
 
+            c.BlockManifestHash = c.ComputeBlockManifestHash();
+
             // Sign header
             c.ResignHeader(ownerSigningPrivateKey);
 
@@ -339,6 +342,10 @@ namespace HSTRYDoc
             c.ContainerId = br.ReadBytes(ContainerIdSize);
             if (c.ContainerId.Length != ContainerIdSize)
                 throw new InvalidDataException("ContainerId missing/invalid.");
+
+            c.BlockManifestHash = br.ReadBytes(Crypto.Sha256Size);
+            if (c.BlockManifestHash.Length != Crypto.Sha256Size)
+                throw new InvalidDataException("Block manifest hash missing/invalid.");
 
             int recipientCount = br.ReadInt32();
             if (recipientCount <= 0)
@@ -478,6 +485,8 @@ namespace HSTRYDoc
             if (!c.Validate(out string error))
                 throw new InvalidDataException($"Container invalid: {error}");
 
+            c.VerifyBlockManifestOrThrow();
+
             return c;
         }
 
@@ -550,6 +559,9 @@ namespace HSTRYDoc
                 throw new InvalidDataException("ContainerId missing/invalid.");
 
             bw.Write(ContainerId);
+
+            VerifyBlockManifestOrThrow();
+            bw.Write(BlockManifestHash);
 
             bw.Write(_recipients.Count);
             foreach (var r in _recipients)
@@ -738,9 +750,10 @@ namespace HSTRYDoc
         // ============================================================
         // Block access control (V7) - owner must provide ECDH private key
         // ============================================================
-        public void GrantBlockAccess(ECDiffieHellman ownerEcdhPrivateKey, int blockIndex, ECDiffieHellman recipientEcdhPublicKey, BlockRights rights, bool replaceExisting = true)
+        public void GrantBlockAccess(ECDsa ownerSigningPrivateKey, ECDiffieHellman ownerEcdhPrivateKey, int blockIndex, ECDiffieHellman recipientEcdhPublicKey, BlockRights rights, bool replaceExisting = true)
         {
             EnsureKey();
+            EnsureOwnerSigningPrivateKeyMatches(ownerSigningPrivateKey);
             EnsureOwnerEcdhPrivateKeyMatches(ownerEcdhPrivateKey);
 
             if ((uint)blockIndex >= (uint)_blocks.Count)
@@ -780,11 +793,13 @@ namespace HSTRYDoc
             EncryptBodyIntoV7(b, b.BlockKey, bodyPt);
 
             ReencryptFromV7(blockIndex + 1);
+            ResignBlockManifest(ownerSigningPrivateKey);
         }
 
-        public void RevokeBlockAccess(ECDiffieHellman ownerEcdhPrivateKey, int blockIndex, string keyIdHex)
+        public void RevokeBlockAccess(ECDsa ownerSigningPrivateKey, ECDiffieHellman ownerEcdhPrivateKey, int blockIndex, string keyIdHex)
         {
             EnsureKey();
+            EnsureOwnerSigningPrivateKeyMatches(ownerSigningPrivateKey);
             EnsureOwnerEcdhPrivateKeyMatches(ownerEcdhPrivateKey);
 
             if ((uint)blockIndex >= (uint)_blocks.Count)
@@ -812,29 +827,30 @@ namespace HSTRYDoc
             EncryptBodyIntoV7(b, b.BlockKey, bodyPt);
 
             ReencryptFromV7(blockIndex + 1);
+            ResignBlockManifest(ownerSigningPrivateKey);
         }
 
         // ============================================================
         // Bulk access (V7)
         // ============================================================
-        public void GrantReadAllBlocks(ECDiffieHellman ownerEcdhPrivateKey, ECDiffieHellman recipientEcdhPublicKey, IProgress<UiProgress> progress, CancellationToken token)
+        public void GrantReadAllBlocks(ECDsa ownerSigningPrivateKey, ECDiffieHellman ownerEcdhPrivateKey, ECDiffieHellman recipientEcdhPublicKey, IProgress<UiProgress> progress, CancellationToken token)
         {
-            BulkSetAccessAllBlocks(ownerEcdhPrivateKey, recipientEcdhPublicKey, recipientPublicKeyKeyId: null,
+            BulkSetAccessAllBlocks(ownerSigningPrivateKey, ownerEcdhPrivateKey, recipientEcdhPublicKey, recipientPublicKeyKeyId: null,
                 mode: BulkAccessMode.GrantReadIfMissing, rights: BlockRights.Read, progress: progress, token: token);
         }
 
-        public void GrantWriteAllBlocks(ECDiffieHellman ownerEcdhPrivateKey, ECDiffieHellman recipientEcdhPublicKey, IProgress<UiProgress> progress, CancellationToken token)
+        public void GrantWriteAllBlocks(ECDsa ownerSigningPrivateKey, ECDiffieHellman ownerEcdhPrivateKey, ECDiffieHellman recipientEcdhPublicKey, IProgress<UiProgress> progress, CancellationToken token)
         {
-            BulkSetAccessAllBlocks(ownerEcdhPrivateKey, recipientEcdhPublicKey, recipientPublicKeyKeyId: null,
+            BulkSetAccessAllBlocks(ownerSigningPrivateKey, ownerEcdhPrivateKey, recipientEcdhPublicKey, recipientPublicKeyKeyId: null,
                 mode: BulkAccessMode.GrantOverwrite, rights: (BlockRights.Read | BlockRights.Write), progress: progress, token: token);
         }
 
-        public void RevokeAllBlocks(ECDiffieHellman ownerEcdhPrivateKey, byte[] recipientKeyId, IProgress<UiProgress> progress, CancellationToken token)
+        public void RevokeAllBlocks(ECDsa ownerSigningPrivateKey, ECDiffieHellman ownerEcdhPrivateKey, byte[] recipientKeyId, IProgress<UiProgress> progress, CancellationToken token)
         {
             if (recipientKeyId == null || recipientKeyId.Length == 0)
                 throw new ArgumentException("recipientKeyId is required.", nameof(recipientKeyId));
 
-            BulkSetAccessAllBlocks(ownerEcdhPrivateKey, recipientPublicKey: null, recipientPublicKeyKeyId: recipientKeyId,
+            BulkSetAccessAllBlocks(ownerSigningPrivateKey, ownerEcdhPrivateKey, recipientPublicKey: null, recipientPublicKeyKeyId: recipientKeyId,
                 mode: BulkAccessMode.Revoke, rights: BlockRights.None, progress: progress, token: token);
         }
 
@@ -846,6 +862,7 @@ namespace HSTRYDoc
         }
 
         private void BulkSetAccessAllBlocks(
+            ECDsa ownerSigningPrivateKey,
             ECDiffieHellman ownerEcdhPrivateKey,
             ECDiffieHellman? recipientPublicKey,
             byte[]? recipientPublicKeyKeyId,
@@ -855,6 +872,7 @@ namespace HSTRYDoc
             CancellationToken token)
         {
             EnsureKey();
+            EnsureOwnerSigningPrivateKeyMatches(ownerSigningPrivateKey);
             EnsureOwnerEcdhPrivateKeyMatches(ownerEcdhPrivateKey);
 
             int n = _blocks.Count;
@@ -913,70 +931,84 @@ namespace HSTRYDoc
                 progress.Report(new UiProgress { Message = $"Decrypting blocks… {i + 1}/{n}", Indeterminate = false, Maximum = n, Value = i + 1 });
             }
 
-            progress.Report(new UiProgress { Message = "Updating access lists…", Indeterminate = false, Maximum = n, Value = 0 });
+            BlockSnapshot[] snapshots = CaptureBlockSnapshots();
+            byte[] oldManifestHash = BlockManifestHash.ToArray();
+            byte[] oldHeaderSignature = HeaderSignature.ToArray();
 
-            for (int i = 0; i < n; i++)
+            try
             {
-                token.ThrowIfCancellationRequested();
-                var b = _blocks[i];
+                progress.Report(new UiProgress { Message = "Updating access lists…", Indeterminate = false, Maximum = n, Value = 0 });
 
-                if (mode == BulkAccessMode.Revoke)
+                for (int i = 0; i < n; i++)
                 {
-                    b.KeySlots.RemoveAll(s => s.KeyId.SequenceEqual(recipientKeyId));
-                }
-                else
-                {
-                    var existing = b.KeySlots.FirstOrDefault(s => s.KeyId.SequenceEqual(recipientKeyId));
+                    token.ThrowIfCancellationRequested();
+                    var b = _blocks[i];
 
-                    if (mode == BulkAccessMode.GrantReadIfMissing)
+                    if (mode == BulkAccessMode.Revoke)
                     {
-                        if (existing != null && (existing.Rights & BlockRights.Read) != 0)
+                        b.KeySlots.RemoveAll(s => s.KeyId.SequenceEqual(recipientKeyId));
+                    }
+                    else
+                    {
+                        var existing = b.KeySlots.FirstOrDefault(s => s.KeyId.SequenceEqual(recipientKeyId));
+
+                        if (mode == BulkAccessMode.GrantReadIfMissing)
                         {
-                            progress.Report(new UiProgress { Message = $"Updating access lists… {i + 1}/{n}", Maximum = n, Value = i + 1, Indeterminate = false });
-                            continue;
+                            if (existing != null && (existing.Rights & BlockRights.Read) != 0)
+                            {
+                                progress.Report(new UiProgress { Message = $"Updating access lists… {i + 1}/{n}", Maximum = n, Value = i + 1, Indeterminate = false });
+                                continue;
+                            }
                         }
+
+                        if (existing != null)
+                            b.KeySlots.Remove(existing);
+
+                        byte[] wrappedBek = EccKeyWrap.WrapKey32(beks[i], recipientSpki, recipientKeyId, WRAP_PURPOSE_BEK, ContainerId);
+
+                        b.KeySlots.Add(new BlockKeySlot
+                        {
+                            KeyId = recipientKeyId,
+                            Rights = rights,
+                            Alg = RECIPIENT_ALG_ECDH_HKDF_SHA256_AESGCM,
+                            WrappedBek = wrappedBek
+                        });
                     }
 
-                    if (existing != null)
-                        b.KeySlots.Remove(existing);
-
-                    byte[] wrappedBek = EccKeyWrap.WrapKey32(beks[i], recipientSpki, recipientKeyId, WRAP_PURPOSE_BEK, ContainerId);
-
-                    b.KeySlots.Add(new BlockKeySlot
-                    {
-                        KeyId = recipientKeyId,
-                        Rights = rights,
-                        Alg = RECIPIENT_ALG_ECDH_HKDF_SHA256_AESGCM,
-                        WrappedBek = wrappedBek
-                    });
+                    progress.Report(new UiProgress { Message = $"Updating access lists… {i + 1}/{n}", Indeterminate = false, Maximum = n, Value = i + 1 });
                 }
 
-                progress.Report(new UiProgress { Message = $"Updating access lists… {i + 1}/{n}", Indeterminate = false, Maximum = n, Value = i + 1 });
+                progress.Report(new UiProgress { Message = "Rebuilding chain…", Indeterminate = false, Maximum = n, Value = 0 });
+
+                if (_blocks.Count > 0)
+                    _blocks[0].PrevHash = ZeroHash.ToArray();
+
+                for (int i = 0; i < n; i++)
+                {
+                    token.ThrowIfCancellationRequested();
+
+                    var b = _blocks[i];
+                    b.Index = i;
+
+                    if (i == 0)
+                        b.PrevHash = ZeroHash.ToArray();
+                    else
+                        b.PrevHash = ComputeBlockHash(_blocks[i - 1]);
+
+                    b.Title = titles[i];
+
+                    EncryptTitleIntoV7(b, beks[i], titles[i]);
+                    EncryptBodyIntoV7(b, beks[i], bodies[i]);
+
+                    progress.Report(new UiProgress { Message = $"Rebuilding chain… {i + 1}/{n}", Indeterminate = false, Maximum = n, Value = i + 1 });
+                }
+
+                ResignBlockManifest(ownerSigningPrivateKey);
             }
-
-            progress.Report(new UiProgress { Message = "Rebuilding chain…", Indeterminate = false, Maximum = n, Value = 0 });
-
-            if (_blocks.Count > 0)
-                _blocks[0].PrevHash = ZeroHash.ToArray();
-
-            for (int i = 0; i < n; i++)
+            catch
             {
-                token.ThrowIfCancellationRequested();
-
-                var b = _blocks[i];
-                b.Index = i;
-
-                if (i == 0)
-                    b.PrevHash = ZeroHash.ToArray();
-                else
-                    b.PrevHash = ComputeBlockHash(_blocks[i - 1]);
-
-                b.Title = titles[i];
-
-                EncryptTitleIntoV7(b, beks[i], titles[i]);
-                EncryptBodyIntoV7(b, beks[i], bodies[i]);
-
-                progress.Report(new UiProgress { Message = $"Rebuilding chain… {i + 1}/{n}", Indeterminate = false, Maximum = n, Value = i + 1 });
+                RestoreBlockSnapshots(snapshots, oldManifestHash, oldHeaderSignature);
+                throw;
             }
 
             for (int i = 0; i < n; i++)
@@ -1009,9 +1041,10 @@ namespace HSTRYDoc
             }
         }
 
-        public Block AddRtfDocument(string title, string rtf)
+        public Block AddRtfDocument(ECDsa ownerSigningPrivateKey, string title, string rtf)
         {
             EnsureKey();
+            EnsureOwnerSigningPrivateKeyMatches(ownerSigningPrivateKey);
 
             if (!IsOpenedAsOwner)
                 throw new UnauthorizedAccessException("Only the container owner can create new blocks.");
@@ -1060,7 +1093,13 @@ namespace HSTRYDoc
             EncryptBodyIntoV7(b, b.BlockKey, plaintext);
 
             _blocks.Add(b);
+            ResignBlockManifest(ownerSigningPrivateKey);
             return b;
+        }
+
+        public Block AddRtfDocument(string title, string rtf)
+        {
+            throw new InvalidOperationException("Adding a block requires the owner signing private key.");
         }
 
         public string GetRtfDocument(int index)
@@ -1076,9 +1115,10 @@ namespace HSTRYDoc
             return GetContainerEncoding().GetString(bodyPt);
         }
 
-        public void UpdateRtfDocument(int index, string newRtf)
+        public void UpdateRtfDocument(ECDsa ownerSigningPrivateKey, int index, string newRtf)
         {
             EnsureKey();
+            EnsureOwnerSigningPrivateKeyMatches(ownerSigningPrivateKey);
             var b = GetBlock(index);
 
             EnsureWritableFrom(index);
@@ -1109,6 +1149,7 @@ namespace HSTRYDoc
                 EncryptBodyIntoV7(b, b.BlockKey, pt);
 
                 ReencryptFromV7(index + 1);
+                ResignBlockManifest(ownerSigningPrivateKey);
             }
             catch
             {
@@ -1117,9 +1158,15 @@ namespace HSTRYDoc
             }
         }
 
-        public void RemoveBlock(int index)
+        public void UpdateRtfDocument(int index, string newRtf)
+        {
+            throw new InvalidOperationException("Updating a block requires the owner signing private key.");
+        }
+
+        public void RemoveBlock(ECDsa ownerSigningPrivateKey, int index)
         {
             EnsureKey();
+            EnsureOwnerSigningPrivateKeyMatches(ownerSigningPrivateKey);
 
             if ((uint)index >= (uint)_blocks.Count)
                 throw new ArgumentOutOfRangeException(nameof(index));
@@ -1140,7 +1187,10 @@ namespace HSTRYDoc
             _blocks.RemoveAt(index);
 
             if (_blocks.Count == 0)
+            {
+                ResignBlockManifest(ownerSigningPrivateKey);
                 return;
+            }
 
             for (int i = index; i < _blocks.Count; i++)
             {
@@ -1154,11 +1204,19 @@ namespace HSTRYDoc
                 EncryptTitleIntoV7(block, block.BlockKey!, title);
                 EncryptBodyIntoV7(block, block.BlockKey!, body);
             }
+
+            ResignBlockManifest(ownerSigningPrivateKey);
         }
 
-        public void RenameBlock(int index, string newTitle)
+        public void RemoveBlock(int index)
+        {
+            throw new InvalidOperationException("Removing a block requires the owner signing private key.");
+        }
+
+        public void RenameBlock(ECDsa ownerSigningPrivateKey, int index, string newTitle)
         {
             EnsureKey();
+            EnsureOwnerSigningPrivateKeyMatches(ownerSigningPrivateKey);
 
             if (string.IsNullOrWhiteSpace(newTitle))
                 throw new ArgumentException("Title must not be empty.");
@@ -1182,6 +1240,12 @@ namespace HSTRYDoc
             EncryptBodyIntoV7(b, b.BlockKey, bodyPt);
 
             ReencryptFromV7(index + 1);
+            ResignBlockManifest(ownerSigningPrivateKey);
+        }
+
+        public void RenameBlock(int index, string newTitle)
+        {
+            throw new InvalidOperationException("Renaming a block requires the owner signing private key.");
         }
 
         // ============================================================
@@ -1272,9 +1336,6 @@ namespace HSTRYDoc
                 });
             }
 
-            // resign header with NEW owner's signing key
-            ResignHeader(newOwnerSigningPrivateKey);
-
             // rebuild chain (accessHash changed -> AD changed -> re-encrypt all)
             if (n > 0)
                 _blocks[0].PrevHash = ZeroHash.ToArray();
@@ -1296,6 +1357,7 @@ namespace HSTRYDoc
             }
 
             _activeKeyId = newOwnerKid;
+            ResignBlockManifest(newOwnerSigningPrivateKey);
         }
 
         // ============================================================
@@ -1349,6 +1411,40 @@ namespace HSTRYDoc
                 ih.AppendData(b.Ciphertext);
 
             return ih.GetHashAndReset();
+        }
+
+        private byte[] ComputeBlockManifestHash()
+        {
+            Span<byte> i4 = stackalloc byte[4];
+            using var ih = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+
+            ih.AppendData(Encoding.ASCII.GetBytes("HSTRY-BLOCK-MANIFEST-V1"));
+            ih.AppendData(new[] { Version });
+
+            BinaryPrimitives.WriteInt32LittleEndian(i4, _blocks.Count);
+            ih.AppendData(i4);
+
+            foreach (var b in _blocks)
+                ih.AppendData(ComputeBlockHash(b));
+
+            return ih.GetHashAndReset();
+        }
+
+        private void VerifyBlockManifestOrThrow()
+        {
+            if (BlockManifestHash == null || BlockManifestHash.Length != Crypto.Sha256Size)
+                throw new InvalidDataException("Block manifest hash missing/invalid.");
+
+            byte[] current = ComputeBlockManifestHash();
+            if (!CryptographicOperations.FixedTimeEquals(BlockManifestHash, current))
+                throw new InvalidDataException("Block manifest hash invalid. The block list may have been tampered with.");
+        }
+
+        private void ResignBlockManifest(ECDsa ownerSigningPrivateKey)
+        {
+            EnsureOwnerSigningPrivateKeyMatches(ownerSigningPrivateKey);
+            BlockManifestHash = ComputeBlockManifestHash();
+            ResignHeader(ownerSigningPrivateKey);
         }
 
         public bool Validate(out string error)
@@ -1478,6 +1574,97 @@ namespace HSTRYDoc
             }
         }
 
+        private BlockSnapshot[] CaptureBlockSnapshots()
+        {
+            var snapshots = new BlockSnapshot[_blocks.Count];
+            for (int i = 0; i < _blocks.Count; i++)
+                snapshots[i] = BlockSnapshot.Capture(_blocks[i]);
+            return snapshots;
+        }
+
+        private void RestoreBlockSnapshots(BlockSnapshot[] snapshots, byte[] manifestHash, byte[] headerSignature)
+        {
+            for (int i = 0; i < snapshots.Length && i < _blocks.Count; i++)
+                snapshots[i].Restore(_blocks[i]);
+
+            BlockManifestHash = manifestHash.ToArray();
+            HeaderSignature = headerSignature.ToArray();
+        }
+
+        private sealed class BlockSnapshot
+        {
+            private readonly int _index;
+            private readonly string _title;
+            private readonly DateTimeOffset _createdUtc;
+            private readonly DateTimeOffset _modifiedUtc;
+            private readonly byte[] _prevHash;
+            private readonly BlockKeySlot[] _keySlots;
+            private readonly byte[]? _blockKey;
+            private readonly BlockRights _myRights;
+            private readonly byte[] _titleNonce;
+            private readonly byte[] _titleTag;
+            private readonly byte[] _titleCiphertext;
+            private readonly byte[] _nonce;
+            private readonly byte[] _tag;
+            private readonly byte[] _ciphertext;
+
+            private BlockSnapshot(Block b)
+            {
+                _index = b.Index;
+                _title = b.Title;
+                _createdUtc = b.CreatedUtc;
+                _modifiedUtc = b.ModifiedUtc;
+                _prevHash = b.PrevHash.ToArray();
+                _keySlots = b.KeySlots
+                    .Select(s => new BlockKeySlot
+                    {
+                        KeyId = s.KeyId.ToArray(),
+                        Rights = s.Rights,
+                        Alg = s.Alg,
+                        WrappedBek = s.WrappedBek.ToArray()
+                    })
+                    .ToArray();
+                _blockKey = b.BlockKey?.ToArray();
+                _myRights = b.MyRights;
+                _titleNonce = b.TitleNonce.ToArray();
+                _titleTag = b.TitleTag.ToArray();
+                _titleCiphertext = b.TitleCiphertext.ToArray();
+                _nonce = b.Nonce.ToArray();
+                _tag = b.Tag.ToArray();
+                _ciphertext = b.Ciphertext.ToArray();
+            }
+
+            public static BlockSnapshot Capture(Block b) => new(b);
+
+            public void Restore(Block b)
+            {
+                b.Index = _index;
+                b.Title = _title;
+                b.CreatedUtc = _createdUtc;
+                b.ModifiedUtc = _modifiedUtc;
+                b.PrevHash = _prevHash.ToArray();
+                b.KeySlots.Clear();
+                foreach (var s in _keySlots)
+                {
+                    b.KeySlots.Add(new BlockKeySlot
+                    {
+                        KeyId = s.KeyId.ToArray(),
+                        Rights = s.Rights,
+                        Alg = s.Alg,
+                        WrappedBek = s.WrappedBek.ToArray()
+                    });
+                }
+                b.BlockKey = _blockKey?.ToArray();
+                b.MyRights = _myRights;
+                b.TitleNonce = _titleNonce.ToArray();
+                b.TitleTag = _titleTag.ToArray();
+                b.TitleCiphertext = _titleCiphertext.ToArray();
+                b.Nonce = _nonce.ToArray();
+                b.Tag = _tag.ToArray();
+                b.Ciphertext = _ciphertext.ToArray();
+            }
+        }
+
         private string DecryptTitleV7OrThrow(Block b)
         {
             if (b.BlockKey == null)
@@ -1531,7 +1718,7 @@ namespace HSTRYDoc
                 throw new InvalidOperationException("Container is not open/initialized (no key in memory).");
             if (_key.Length != 32)
                 throw new InvalidOperationException("Invalid container key length in memory.");
-            if (Version != V7)
+            if (Version != CurrentVersion)
                 throw new InvalidOperationException("Invalid container version in memory.");
             if (ContainerId == null || ContainerId.Length != ContainerIdSize)
                 throw new InvalidOperationException("ContainerId missing/invalid in memory.");
@@ -1611,6 +1798,11 @@ namespace HSTRYDoc
                 throw new InvalidOperationException("ContainerId missing/invalid.");
 
             bw.Write(ContainerId);
+
+            if (BlockManifestHash == null || BlockManifestHash.Length != Crypto.Sha256Size)
+                throw new InvalidOperationException("Block manifest hash missing/invalid.");
+
+            bw.Write(BlockManifestHash);
 
             bw.Write(_recipients.Count);
             foreach (var r in _recipients)

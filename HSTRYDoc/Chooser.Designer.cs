@@ -6,6 +6,7 @@
 
         private Button btnNew;
         private Button btnOpen;
+        private Button btnOptions;
         private Button btnExit;
 
         protected override void Dispose(bool disposing)
@@ -19,6 +20,7 @@
             System.ComponentModel.ComponentResourceManager resources = new System.ComponentModel.ComponentResourceManager(typeof(Chooser));
             btnNew = new Button();
             btnOpen = new Button();
+            btnOptions = new Button();
             btnExit = new Button();
             panel1 = new Panel();
             panel2 = new Panel();
@@ -52,21 +54,33 @@
             btnOpen.TabIndex = 2;
             btnOpen.Text = "Open...";
             // 
+            // btnOptions
+            // 
+            btnOptions.DialogResult = DialogResult.Retry;
+            btnOptions.Dock = DockStyle.Right;
+            btnOptions.Location = new Point(404, 13);
+            btnOptions.Margin = new Padding(3, 4, 3, 4);
+            btnOptions.Name = "btnOptions";
+            btnOptions.Size = new Size(114, 45);
+            btnOptions.TabIndex = 3;
+            btnOptions.Text = "Options...";
+            // 
             // btnExit
             // 
             btnExit.DialogResult = DialogResult.Cancel;
             btnExit.Dock = DockStyle.Right;
-            btnExit.Location = new Point(404, 13);
+            btnExit.Location = new Point(290, 13);
             btnExit.Margin = new Padding(3, 4, 3, 4);
             btnExit.Name = "btnExit";
             btnExit.Size = new Size(114, 45);
-            btnExit.TabIndex = 3;
+            btnExit.TabIndex = 4;
             btnExit.Text = "Exit";
             // 
             // panel1
             // 
             panel1.BackColor = Color.White;
             panel1.Controls.Add(btnExit);
+            panel1.Controls.Add(btnOptions);
             panel1.Controls.Add(btnOpen);
             panel1.Controls.Add(btnNew);
             panel1.Dock = DockStyle.Bottom;

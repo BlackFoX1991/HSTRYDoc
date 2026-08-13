@@ -3,20 +3,20 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 
 namespace HSTRYDoc
 {
     public sealed class AppState
     {
-        // NEW: if true, ask on every start whether to search drives for HSTRY_KEY
-        public bool UseDriveKeySearch { get; set; } = false;
-
-
         public WindowPlacement MainWindow { get; set; } = new WindowPlacement();
         public List<RecentFileEntry> RecentFiles { get; set; } = new List<RecentFileEntry>();
 
-        // NEW: stores the user's chosen private key path
+        // Legacy import only: older versions stored the full private key path.
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
         public string? PrivateKeyPath { get; set; }
+        public string? PrivateKeyDriveRoot { get; set; }
+        public string? PrivateKeyFileName { get; set; }
 
         private const int MaxRecent = 20;
 
@@ -34,6 +34,7 @@ namespace HSTRYDoc
                 var json = File.ReadAllText(StateFilePath);
                 var state = JsonSerializer.Deserialize<AppState>(json) ?? new AppState();
 
+                state.MigrateLegacyPrivateKeyPath();
                 state.TrimAndCleanup();
                 return state;
             }
@@ -61,6 +62,7 @@ namespace HSTRYDoc
         {
             try
             {
+                MigrateLegacyPrivateKeyPath();
                 TrimAndCleanup();
 
                 var dir = Path.GetDirectoryName(StateFilePath);
@@ -125,9 +127,33 @@ namespace HSTRYDoc
                 .Take(MaxRecent)
                 .ToList();
 
-            // If stored private key path no longer exists, clear it
-            if (!string.IsNullOrWhiteSpace(PrivateKeyPath) && !File.Exists(PrivateKeyPath))
-                PrivateKeyPath = null;
+            if (!string.IsNullOrWhiteSpace(PrivateKeyDriveRoot))
+                PrivateKeyDriveRoot = KeyStorage.NormalizeDriveRoot(PrivateKeyDriveRoot);
+
+            if (!string.IsNullOrWhiteSpace(PrivateKeyFileName))
+                PrivateKeyFileName = Path.GetFileName(PrivateKeyFileName);
+
+            // Keep DriveRoot even when the drive is currently disconnected.
+            // PrivateKeyPath is only accepted as an old import field and is not persisted.
+            PrivateKeyPath = null;
+        }
+
+        internal void MigrateLegacyPrivateKeyPath()
+        {
+            if (!string.IsNullOrWhiteSpace(PrivateKeyDriveRoot) &&
+                !string.IsNullOrWhiteSpace(PrivateKeyFileName))
+                return;
+
+            if (string.IsNullOrWhiteSpace(PrivateKeyPath))
+                return;
+
+            if (KeyStorage.TryGetDriveRootAndFileNameFromKeyPath(PrivateKeyPath, out string driveRoot, out string fileName))
+            {
+                PrivateKeyDriveRoot = driveRoot;
+                PrivateKeyFileName = fileName;
+            }
+
+            PrivateKeyPath = null;
         }
     }
 

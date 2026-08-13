@@ -874,10 +874,9 @@
             // 
             // keyLookupExternalDriveToolStripMenuItem
             // 
-            keyLookupExternalDriveToolStripMenuItem.CheckOnClick = true;
             keyLookupExternalDriveToolStripMenuItem.Name = "keyLookupExternalDriveToolStripMenuItem";
             keyLookupExternalDriveToolStripMenuItem.Size = new Size(267, 26);
-            keyLookupExternalDriveToolStripMenuItem.Text = "Key-Lookup external Drive";
+            keyLookupExternalDriveToolStripMenuItem.Text = "Select key drive...";
             // 
             // helpToolStripMenuItem
             // 

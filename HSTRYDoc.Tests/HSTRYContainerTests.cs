@@ -20,10 +20,10 @@ namespace HSTRYDoc.Tests
                 new[] { ownerEcdh },
                 Encoding.UTF8);
 
-            container.AddRtfDocument("Alpha", CreateRtf("Alpha", "first body"));
-            container.AddRtfDocument("Beta", CreateRtf("Beta", "second body"));
-            container.RenameBlock(1, "Gamma");
-            container.RemoveBlock(0);
+            container.AddRtfDocument(ownerSig, "Alpha", CreateRtf("Alpha", "first body"));
+            container.AddRtfDocument(ownerSig, "Beta", CreateRtf("Beta", "second body"));
+            container.RenameBlock(ownerSig, 1, "Gamma");
+            container.RemoveBlock(ownerSig, 0);
 
             container.Save(path);
 
@@ -77,7 +77,7 @@ namespace HSTRYDoc.Tests
 
             Assert.False(loaded.IsOpenedAsOwner);
             Assert.Throws<UnauthorizedAccessException>(
-                () => loaded.AddRtfDocument("Recipient", CreateRtf("Recipient", "body")));
+                () => loaded.AddRtfDocument(ownerSig, "Recipient", CreateRtf("Recipient", "body")));
         }
 
         [Fact]
@@ -96,10 +96,10 @@ namespace HSTRYDoc.Tests
                 new[] { ownerEcdh },
                 Encoding.UTF8);
 
-            container.AddRtfDocument("Doc", CreateRtf("Doc", "version one"));
+            container.AddRtfDocument(ownerSig, "Doc", CreateRtf("Doc", "version one"));
             container.Save(path);
 
-            container.UpdateRtfDocument(0, CreateRtf("Doc", "version two"));
+            container.UpdateRtfDocument(ownerSig, 0, CreateRtf("Doc", "version two"));
             container.Save(path);
 
             Assert.True(File.Exists(recoveryPath));
@@ -128,15 +128,97 @@ namespace HSTRYDoc.Tests
                 new[] { oldOwnerEcdh },
                 Encoding.UTF8);
 
-            container.AddRtfDocument("Before", CreateRtf("Before", "initial"));
+            container.AddRtfDocument(oldOwnerSig, "Before", CreateRtf("Before", "initial"));
             container.TransferOwnership(oldOwnerSig, oldOwnerEcdh, newOwnerSig, newOwnerEcdh);
             container.Save(path);
 
             HSTRYContainer loaded = HSTRYContainer.LoadWithPrivateKeyFile(path, newOwnerEcdh);
 
             Assert.True(loaded.IsOpenedAsOwner);
-            loaded.AddRtfDocument("After", CreateRtf("After", "new owner"));
+            loaded.AddRtfDocument(newOwnerSig, "After", CreateRtf("After", "new owner"));
             Assert.Equal(2, loaded.Blocks.Count);
+        }
+
+        [Fact]
+        public void Load_RejectsTamperedBlockCount()
+        {
+            using var ownerEcdh = HSTRYContainer.EcdhKeyFiles.CreateNewKeyPair();
+            using var ownerSig = HSTRYContainer.EcdsaKeyFiles.CreateNewKeyPair();
+
+            HSTRYContainer container = HSTRYContainer.CreateNewForRecipients(
+                ownerSig,
+                ownerEcdh,
+                new[] { ownerEcdh },
+                Encoding.UTF8);
+
+            container.AddRtfDocument(ownerSig, "Alpha", CreateRtf("Alpha", "first body"));
+            container.AddRtfDocument(ownerSig, "Beta", CreateRtf("Beta", "second body"));
+
+            using MemoryStream ms = new();
+            container.Save(ms);
+
+            byte[] bytes = ms.ToArray();
+            int blockCountOffset = FindBlockCountOffset(bytes);
+            BitConverter.GetBytes(1).CopyTo(bytes, blockCountOffset);
+
+            using MemoryStream tampered = new(bytes);
+            InvalidDataException ex = Assert.Throws<InvalidDataException>(
+                () => HSTRYContainer.LoadWithPrivateKey(tampered, ownerEcdh));
+
+            Assert.Contains("manifest", ex.Message, StringComparison.OrdinalIgnoreCase);
+        }
+
+        [Fact]
+        public void GrantReadAllBlocks_CancelDuringMutation_RollsBackContainer()
+        {
+            using var ownerEcdh = HSTRYContainer.EcdhKeyFiles.CreateNewKeyPair();
+            using var ownerSig = HSTRYContainer.EcdsaKeyFiles.CreateNewKeyPair();
+            using var recipientEcdh = HSTRYContainer.EcdhKeyFiles.CreateNewKeyPair();
+            using var recipientPub = CreatePublicOnlyKey(recipientEcdh);
+
+            HSTRYContainer container = HSTRYContainer.CreateNewForRecipients(
+                ownerSig,
+                ownerEcdh,
+                new[] { ownerEcdh },
+                Encoding.UTF8);
+
+            container.AddRtfDocument(ownerSig, "Alpha", CreateRtf("Alpha", "first body"));
+            container.AddRtfDocument(ownerSig, "Beta", CreateRtf("Beta", "second body"));
+            container.AddRecipient(ownerSig, recipientPub);
+
+            byte[] recipientKeyId = SHA256.HashData(recipientEcdh.ExportSubjectPublicKeyInfo());
+            using CancellationTokenSource cts = new();
+            var progress = new CancelOnFirstAccessMutationProgress(cts);
+
+            Assert.Throws<OperationCanceledException>(() =>
+                container.GrantReadAllBlocks(ownerSig, ownerEcdh, recipientPub, progress, cts.Token));
+
+            Assert.True(container.Validate(out string error), error);
+            Assert.DoesNotContain(container.Blocks, b => b.KeySlots.Any(s => s.KeyId.SequenceEqual(recipientKeyId)));
+        }
+
+        private sealed class CancelOnFirstAccessMutationProgress : IProgress<UiProgress>
+        {
+            private readonly CancellationTokenSource _cts;
+            private bool _cancelled;
+
+            public CancelOnFirstAccessMutationProgress(CancellationTokenSource cts)
+            {
+                _cts = cts;
+            }
+
+            public void Report(UiProgress value)
+            {
+                if (_cancelled)
+                    return;
+
+                if ((value.Message ?? string.Empty).StartsWith("Updating access lists", StringComparison.Ordinal) &&
+                    value.Value.GetValueOrDefault() >= 1)
+                {
+                    _cancelled = true;
+                    _cts.Cancel();
+                }
+            }
         }
 
         private static ECDiffieHellman CreatePublicOnlyKey(ECDiffieHellman privateKey)
@@ -157,6 +239,35 @@ namespace HSTRYDoc.Tests
             => text.Replace("\\", "\\\\", StringComparison.Ordinal)
                    .Replace("{", "\\{", StringComparison.Ordinal)
                    .Replace("}", "\\}", StringComparison.Ordinal);
+
+        private static int FindBlockCountOffset(byte[] bytes)
+        {
+            using MemoryStream ms = new(bytes, writable: false);
+            using BinaryReader br = new(ms, Encoding.UTF8, leaveOpen: true);
+
+            br.ReadBytes(Global.FileMagic.Length);
+            br.ReadByte();
+            int encLen = br.ReadByte();
+            br.ReadBytes(encLen);
+            br.ReadBytes(br.ReadUInt16());
+            br.ReadBytes(br.ReadUInt16());
+            br.ReadBytes(32);
+            br.ReadBytes(32);
+
+            int recipientCount = br.ReadInt32();
+            for (int i = 0; i < recipientCount; i++)
+            {
+                br.ReadBytes(br.ReadByte());
+                br.ReadBytes(br.ReadUInt16());
+                br.ReadByte();
+                br.ReadBytes(br.ReadUInt16());
+                br.ReadBytes(br.ReadUInt16());
+            }
+
+            br.ReadByte();
+            br.ReadBytes(br.ReadUInt16());
+            return checked((int)ms.Position);
+        }
 
         private sealed class TemporaryDirectory : IDisposable
         {
